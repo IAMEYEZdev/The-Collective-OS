@@ -164,9 +164,15 @@ export const DASHBOARD_URL =
 export const DB_ENCRYPTION_KEY =
   process.env.DB_ENCRYPTION_KEY || envConfig.DB_ENCRYPTION_KEY || '';
 
-// Google API key for Gemini (memory extraction + consolidation)
+// Google API key for Gemini (memory extraction + consolidation).
+// Supports both legacy GOOGLE_API_KEY and new GEMINI_API_KEY_PRIMARY alias.
 export const GOOGLE_API_KEY =
-  process.env.GOOGLE_API_KEY || envConfig.GOOGLE_API_KEY || '';
+  process.env.GEMINI_API_KEY_PRIMARY || process.env.GOOGLE_API_KEY || readEnvFile(['GEMINI_API_KEY_PRIMARY']).GEMINI_API_KEY_PRIMARY || envConfig.GOOGLE_API_KEY || '';
+
+// Secondary Gemini key: used as fallback when primary hits 429.
+// Should be from a separate Google Cloud project for true quota isolation.
+export const GOOGLE_API_KEY_SECONDARY =
+  process.env.GEMINI_API_KEY_SECONDARY || readEnvFile(['GEMINI_API_KEY_SECONDARY']).GEMINI_API_KEY_SECONDARY || '';
 
 // Streaming strategy for progressive Telegram updates.
 // 'global-throttle' (default): edits a placeholder message with streamed text,

@@ -1,4 +1,5 @@
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 
 import { loadAgentConfig, listAgentIds, resolveAgentDir, resolveAgentClaudeMd } from './agent-config.js';
@@ -11,6 +12,8 @@ import { initSecurity, setAuditCallback } from './security.js';
 import { logger } from './logger.js';
 import { cleanupOldUploads } from './media.js';
 import { runConsolidation } from './memory-consolidate.js';
+import { flushIngestionBuffer, flushBufferOnShutdown } from './memory-ingest.js';
+import { setRateLimitFatigueCallback } from './gemini.js';
 import { runDecaySweep } from './memory.js';
 import { initOAuthHealthCheck } from './oauth-health.js';
 import { initOrchestrator } from './orchestrator.js';
@@ -21,8 +24,9 @@ import { setTelegramConnected, setBotInfo } from './state.js';
 const agentFlagIndex = process.argv.indexOf('--agent');
 const AGENT_ID = agentFlagIndex !== -1 ? process.argv[agentFlagIndex + 1] : 'main';
 
-// Export AGENT_ID to env so child processes (schedule-cli, etc.) inherit it
+// Export AGENT_ID and PROJECT_ROOT to env so child processes (schedule-cli, hive-cli, etc.) inherit them
 process.env.CLAUDECLAW_AGENT_ID = AGENT_ID;
+process.env.CLAUDECLAW_PROJECT_ROOT = PROJECT_ROOT;
 
 if (AGENT_ID !== 'main') {
   const agentConfig = loadAgentConfig(AGENT_ID);
@@ -55,12 +59,21 @@ if (AGENT_ID !== 'main') {
     try {
       systemPrompt = fs.readFileSync(externalClaudeMd, 'utf-8');
     } catch { /* unreadable */ }
+    // Load Obsidian config from env vars (main bot only; sub-agents use agent.yaml)
+    const obsVault = process.env.OBSIDIAN_VAULT;
+    const obsFolders = process.env.OBSIDIAN_FOLDERS;
+    const obsReadOnly = process.env.OBSIDIAN_READ_ONLY;
+    const obsidian = obsVault && obsFolders
+      ? { vault: obsVault, folders: obsFolders.split(',').map(s => s.trim()), readOnly: obsReadOnly?.split(',').map(s => s.trim()) }
+      : undefined;
+
     if (systemPrompt) {
       setAgentOverrides({
         agentId: 'main',
         botToken: activeBotToken,
         cwd: PROJECT_ROOT,
         systemPrompt,
+        obsidian,
       });
       logger.info({ source: externalClaudeMd }, 'Loaded CLAUDE.md from CLAUDECLAW_CONFIG');
     }
@@ -146,6 +159,16 @@ async function main(): Promise<void> {
 
   initOrchestrator();
 
+  // Wire up rate-limit fatigue callback (B.1): notify Jason when memory layer is offline
+  if (ALLOWED_CHAT_ID) {
+    setRateLimitFatigueCallback(() => {
+      bot.api.sendMessage(
+        ALLOWED_CHAT_ID,
+        '⚠️ Gemini rate limits have been hit repeatedly. Memory ingestion, consolidation, and relevance evaluation are effectively offline. Consider upgrading the Gemini API tier or reducing call frequency.',
+      ).catch((err) => logger.error({ err }, 'Failed to send rate-limit fatigue alert'));
+    });
+  }
+
   // Decay and consolidation run ONLY in the main process to prevent
   // multi-process over-decay (5x decay on simultaneous restart) and
   // duplicate consolidation records from overlapping memory batches.
@@ -184,7 +207,9 @@ async function main(): Promise<void> {
     // War Room voice server (auto-start if enabled, with auto-respawn)
     if (WARROOM_ENABLED) {
       const { spawn } = await import('child_process');
-      const venvPython = path.join(PROJECT_ROOT, 'warroom', '.venv', 'bin', 'python');
+      const venvPython = process.platform === 'win32'
+        ? path.join(PROJECT_ROOT, 'warroom', '.venv', 'Scripts', 'python.exe')
+        : path.join(PROJECT_ROOT, 'warroom', '.venv', 'bin', 'python');
       const serverScript = path.join(PROJECT_ROOT, 'warroom', 'server.py');
 
       // Write agent roster to /tmp so the Python server can discover agents dynamically
@@ -192,12 +217,12 @@ async function main(): Promise<void> {
         const ids = ['main', ...listAgentIds().filter((id) => id !== 'main')];
         const roster = ids.map((id) => {
           try {
-            if (id === 'main') return { id: 'main', name: 'Main', description: 'General ops and triage' };
+            if (id === 'main') return { id: 'main', name: 'Melanie', description: 'General ops and triage' };
             const cfg = loadAgentConfig(id);
             return { id, name: cfg.name || id, description: cfg.description || '' };
           } catch { return { id, name: id, description: '' }; }
         });
-        fs.writeFileSync('/tmp/warroom-agents.json', JSON.stringify(roster, null, 2));
+        fs.writeFileSync(path.join(os.tmpdir(), 'warroom-agents.json'), JSON.stringify(roster, null, 2));
       } catch (err) {
         logger.warn({ err }, 'Could not write warroom agent roster');
       }
@@ -217,7 +242,7 @@ async function main(): Promise<void> {
           }
         } else {
         // Dedicated log file for the warroom subprocess
-        const warroomLogPath = '/tmp/warroom-debug.log';
+        const warroomLogPath = path.join(os.tmpdir(), 'warroom-debug.log');
         let warroomLogFd: number | null = null;
         try {
           warroomLogFd = fs.openSync(warroomLogPath, 'a');
@@ -347,6 +372,9 @@ async function main(): Promise<void> {
 
   const shutdown = async () => {
     logger.info('Shutting down...');
+    // Flush ingestion buffer before exit (B.1 Task 2).
+    // Bias toward logging and continuing rather than blocking shutdown.
+    try { flushBufferOnShutdown(); } catch (err) { logger.warn({ err }, 'Buffer flush on shutdown failed (non-fatal)'); }
     setTelegramConnected(false);
     releaseLock();
     await bot.stop();

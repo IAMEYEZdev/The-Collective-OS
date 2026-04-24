@@ -15,13 +15,18 @@ export type ErrorCategory =
   | 'network'
   | 'billing'
   | 'overloaded'
+  | 'bad_image'
+  | 'bad_payload'
   | 'unknown';
+
+export type RetryStrategy = 'normal' | 'strip_images_and_retry' | 'new_session';
 
 export interface ErrorRecovery {
   shouldRetry: boolean;
   shouldNewChat: boolean;
   shouldSwitchModel: boolean;
   retryAfterMs: number;
+  retryStrategy?: RetryStrategy;
   userMessage: string;
 }
 
@@ -108,6 +113,28 @@ const CONTEXT_PATTERNS = [
   'max input tokens',
   'too long',
   'token limit',
+];
+
+const BAD_IMAGE_PATTERNS = [
+  'could not process image',
+  'invalid image',
+  'image too large',
+  'unsupported image',
+  'unable to process image',
+  'image format not supported',
+  'failed to decode image',
+  'image processing error',
+  'cannot decode image',
+  'invalid base64',
+  'invalid media type',
+];
+
+const BAD_PAYLOAD_PATTERNS = [
+  'invalid content',
+  'malformed request',
+  'invalid message format',
+  'could not parse',
+  'invalid request body',
 ];
 
 function matchesAny(text: string, patterns: string[]): boolean {
@@ -231,11 +258,36 @@ export function classifyError(err: unknown, contextTokens?: number): AgentError 
     }, raw);
   }
 
+  // Bad image: poison payload that will persist in session state
+  if (matchesAny(text, BAD_IMAGE_PATTERNS)) {
+    return new AgentError('bad_image', {
+      shouldRetry: true,
+      shouldNewChat: false,
+      shouldSwitchModel: false,
+      retryAfterMs: 1000,
+      retryStrategy: 'strip_images_and_retry',
+      userMessage: "I couldn't read an image in your last message. Retrying without it. If this keeps happening, use /newchat.",
+    }, raw);
+  }
+
+  // Bad payload: request structure that the API can't parse
+  if (matchesAny(text, BAD_PAYLOAD_PATTERNS)) {
+    return new AgentError('bad_payload', {
+      shouldRetry: true,
+      shouldNewChat: false,
+      shouldSwitchModel: false,
+      retryAfterMs: 1000,
+      retryStrategy: 'new_session',
+      userMessage: "A message in the session caused an API error. Retrying with a fresh session.",
+    }, raw);
+  }
+
+  // Unknown: provide actionable info instead of a dead end
   return new AgentError('unknown', {
     shouldRetry: false,
     shouldNewChat: false,
     shouldSwitchModel: false,
     retryAfterMs: 0,
-    userMessage: 'Something went wrong. Check the logs and try again.',
+    userMessage: `An unexpected error occurred: "${text.slice(0, 100)}". Try /newchat if this persists.`,
   }, raw);
 }

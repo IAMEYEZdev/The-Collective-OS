@@ -8,7 +8,10 @@ import path from 'path';
  * so they don't leak to child processes.
  */
 export function readEnvFile(keys: string[]): Record<string, string> {
-  const envFile = path.join(process.cwd(), '.env');
+  // Use CLAUDECLAW_PROJECT_ROOT if set (exported by the main process for sub-agents),
+  // fall back to cwd. This ensures CLI tools work even when cwd is not the project root.
+  const baseDir = process.env.CLAUDECLAW_PROJECT_ROOT || process.cwd();
+  const envFile = path.join(baseDir, '.env');
   let content: string;
   try {
     content = fs.readFileSync(envFile, 'utf-8');

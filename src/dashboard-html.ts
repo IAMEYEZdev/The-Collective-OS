@@ -224,7 +224,7 @@ ${WARROOM_ENABLED ? `<div class="card" style="border:1px solid #1e3a5f">
   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
     <div>
       <div style="font-size:14px;font-weight:600;color:#a5b4fc">War Room Voices</div>
-      <div style="font-size:11px;color:#6b7280;margin-top:2px">Per-agent Gemini Live voice config. Main keeps Charon unless you change it.</div>
+      <div style="font-size:11px;color:#6b7280;margin-top:2px">Per-agent Gemini Live voice config.</div>
     </div>
     <div style="display:flex;gap:8px">
       <button id="voicesSaveBtn" onclick="saveVoices()" disabled style="background:#374151;color:#9ca3af;border:none;border-radius:6px;padding:5px 12px;font-size:12px;font-weight:600;cursor:not-allowed">Save</button>
@@ -255,7 +255,7 @@ ${WARROOM_ENABLED ? `<div class="card" style="border:1px solid #1e3a5f">
     </div>
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
       <select id="meet-agent-select" style="background:#0a0a0a;color:#fff;border:1px solid #2a2a2a;border-radius:6px;padding:6px 10px;font-size:12px;min-width:110px">
-        <option value="main">Main</option>
+        <option value="main">Melanie</option>
       </select>
       <input type="text" id="meet-url-input" placeholder="Paste Meet URL, or leave empty to auto-read clipboard"
         style="flex:1;min-width:220px;background:#0a0a0a;color:#fff;border:1px solid #2a2a2a;border-radius:6px;padding:6px 10px;font-size:12px;font-family:ui-monospace,monospace">
@@ -276,7 +276,7 @@ ${WARROOM_ENABLED ? `<div class="card" style="border:1px solid #1e3a5f">
     </div>
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
       <select id="meet-voice-agent-select" style="background:#0a0a0a;color:#fff;border:1px solid #2a2a2a;border-radius:6px;padding:6px 10px;font-size:12px;min-width:110px">
-        <option value="main">Main</option>
+        <option value="main">Melanie</option>
       </select>
       <input type="text" id="meet-voice-url-input" placeholder="Paste Meet URL, or leave empty to auto-read clipboard"
         style="flex:1;min-width:220px;background:#0a0a0a;color:#fff;border:1px solid #2a2a2a;border-radius:6px;padding:6px 10px;font-size:12px;font-family:ui-monospace,monospace">
@@ -297,7 +297,7 @@ ${WARROOM_ENABLED ? `<div class="card" style="border:1px solid #1e3a5f">
     </div>
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
       <select id="meet-daily-agent-select" style="background:#0a0a0a;color:#fff;border:1px solid #2a2a2a;border-radius:6px;padding:6px 10px;font-size:12px;min-width:110px">
-        <option value="main">Main</option>
+        <option value="main">Melanie</option>
       </select>
       <select id="meet-daily-mode-select" style="background:#0a0a0a;color:#fff;border:1px solid #2a2a2a;border-radius:6px;padding:6px 10px;font-size:12px;min-width:100px">
         <option value="direct">Direct</option>
@@ -1244,8 +1244,12 @@ async function loadMeetAgentOptions() {
       for (const a of data.agents) if (a && a.id) ids.add(a.id);
     }
     const sorted = ['main', ...[...ids].filter(function(x){ return x !== 'main'; }).sort()];
+    const agentNameMap = {};
+    if (data && Array.isArray(data.agents)) {
+      for (const a of data.agents) if (a && a.id) agentNameMap[a.id] = a.name || (a.id.charAt(0).toUpperCase() + a.id.slice(1));
+    }
     const optionsHtml = sorted.map(function(id) {
-      const label = id.charAt(0).toUpperCase() + id.slice(1);
+      const label = agentNameMap[id] || (id.charAt(0).toUpperCase() + id.slice(1));
       return '<option value="' + id + '">' + label + '</option>';
     }).join('');
     if (selAvatar) selAvatar.innerHTML = optionsHtml;

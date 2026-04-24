@@ -5,7 +5,7 @@ import { query } from '@anthropic-ai/claude-agent-sdk';
 
 import { AGENT_MAX_TURNS, PROJECT_ROOT, agentCwd } from './config.js';
 import { readEnvFile } from './env.js';
-import { classifyError, AgentError } from './errors.js';
+import { classifyError, AgentError, type RetryStrategy } from './errors.js';
 import { logger } from './logger.js';
 
 // ── MCP server loading ──────────────────────────────────────────────
@@ -19,36 +19,69 @@ export interface McpStdioConfig {
   env?: Record<string, string>;
 }
 
+export interface McpHttpConfig {
+  type: 'http';
+  url: string;
+  headers?: Record<string, string>;
+}
+
+export type McpServerConfig = McpStdioConfig | McpHttpConfig;
+
 /**
- * Merge MCP server configs from user settings (~/.claude/settings.json) and
- * project settings (.claude/settings.json in cwd), optionally filtered by
+ * Merge MCP server configs from multiple sources, optionally filtered by
  * an allowlist (e.g. from an agent's agent.yaml `mcp_servers` field).
  *
+ * Sources checked (later entries override earlier ones):
+ *   1. User settings:    ~/.claude/settings.json  (mcpServers key)
+ *   2. Project settings: <cwd>/.claude/settings.json (mcpServers key)
+ *   3. Project .mcp.json: <cwd>/.mcp.json (mcpServers key)
+ *   4. Root .mcp.json:   PROJECT_ROOT/.mcp.json (mcpServers key)
+ *
+ * Supports both stdio servers (command field) and HTTP servers (url field).
+ *
  * Exported so the voice bridge can reuse the exact same loader the text
- * bot uses — keeping behavior consistent across channels.
+ * bot uses, keeping behavior consistent across channels.
  */
-export function loadMcpServers(allowlist?: string[], projectCwd?: string): Record<string, McpStdioConfig> {
-  const merged: Record<string, McpStdioConfig> = {};
+export function loadMcpServers(allowlist?: string[], projectCwd?: string): Record<string, McpServerConfig> {
+  const merged: Record<string, McpServerConfig> = {};
 
-  // Load from project settings (.claude/settings.json in cwd). `projectCwd`
-  // lets callers (e.g. the voice bridge) target a specific sub-agent's
-  // settings file without needing the module-level `agentCwd` to be set.
-  const projectSettings = path.join(projectCwd ?? agentCwd ?? PROJECT_ROOT, '.claude', 'settings.json');
-  // Load from user settings (~/.claude/settings.json)
+  const effectiveCwd = projectCwd ?? agentCwd ?? PROJECT_ROOT;
+
+  // Load from settings.json files (mcpServers key inside JSON)
+  const projectSettings = path.join(effectiveCwd, '.claude', 'settings.json');
   const userSettings = path.join(
     process.env.HOME ?? '/tmp',
     '.claude',
     'settings.json',
   );
 
-  for (const file of [userSettings, projectSettings]) {
+  // Load from .mcp.json files (mcpServers key at top level)
+  const projectMcpJson = path.join(effectiveCwd, '.mcp.json');
+  const rootMcpJson = effectiveCwd !== PROJECT_ROOT
+    ? path.join(PROJECT_ROOT, '.mcp.json')
+    : null;
+
+  const sources = [userSettings, projectSettings, projectMcpJson];
+  if (rootMcpJson) sources.push(rootMcpJson);
+
+  for (const file of sources) {
     try {
       const raw = JSON.parse(fs.readFileSync(file, 'utf-8'));
       const servers = raw?.mcpServers;
       if (servers && typeof servers === 'object') {
         for (const [name, config] of Object.entries(servers)) {
           const cfg = config as Record<string, unknown>;
-          if (cfg.command && typeof cfg.command === 'string') {
+
+          // HTTP/Streamable MCP server (url-based)
+          if (cfg.url && typeof cfg.url === 'string') {
+            merged[name] = {
+              type: 'http' as const,
+              url: cfg.url,
+              ...(cfg.headers ? { headers: cfg.headers as Record<string, string> } : {}),
+            };
+          }
+          // Stdio MCP server (command-based)
+          else if (cfg.command && typeof cfg.command === 'string') {
             merged[name] = {
               command: cfg.command,
               ...(cfg.args ? { args: cfg.args as string[] } : {}),
@@ -58,7 +91,7 @@ export function loadMcpServers(allowlist?: string[], projectCwd?: string): Recor
         }
       }
     } catch {
-      // File doesn't exist or is invalid — skip
+      // File doesn't exist or is invalid, skip
     }
   }
 
@@ -132,6 +165,10 @@ export interface AgentResult {
   newSessionId: string | undefined;
   usage: UsageInfo | null;
   aborted?: boolean;
+  /** True when the SDK stopped because maxTurns was exhausted. */
+  hitTurnLimit?: boolean;
+  /** Number of agentic turns the SDK executed. */
+  numTurns?: number;
 }
 
 /**
@@ -201,6 +238,8 @@ export async function runAgent(
   let lastCallCacheRead = 0;
   let lastCallInputTokens = 0;
   let streamedText = '';
+  let hitTurnLimit = false;
+  let numTurns: number | undefined;
 
   // Refresh typing indicator on an interval while Claude works.
   // Telegram's "typing..." action expires after ~5s.
@@ -335,6 +374,14 @@ export async function runAgent(
       if (ev['type'] === 'result') {
         resultText = (ev['result'] as string | null | undefined) ?? null;
 
+        // Detect turn-limit exhaustion (B.2 Fix 1)
+        const resultSubtype = ev['subtype'] as string | undefined;
+        if (resultSubtype === 'error_max_turns') {
+          hitTurnLimit = true;
+          logger.warn('Agent hit maxTurns limit');
+        }
+        numTurns = (ev['num_turns'] as number | undefined) ?? undefined;
+
         // Extract usage info from result event
         const evUsage = ev['usage'] as Record<string, number> | undefined;
         if (evUsage) {
@@ -362,7 +409,7 @@ export async function runAgent(
         }
 
         logger.info(
-          { hasResult: !!resultText, subtype: ev['subtype'] },
+          { hasResult: !!resultText, subtype: resultSubtype, numTurns, hitTurnLimit },
           'Agent result received',
         );
       }
@@ -385,7 +432,7 @@ export async function runAgent(
     clearInterval(typingInterval);
   }
 
-  return { text: resultText, newSessionId, usage };
+  return { text: resultText, newSessionId, usage, hitTurnLimit, numTurns };
 }
 
 // ── Retry wrapper ─────────────────────────────────────────────────
@@ -394,6 +441,43 @@ const MAX_RETRIES = 2;
 const BACKOFF_BASE_MS = 2000;
 const BACKOFF_MULTIPLIER = 4; // 2s, 8s
 
+/** Track repeated identical errors for self-heal (Fix 3). */
+const recentErrors: { msg: string; ts: number }[] = [];
+const SELF_HEAL_THRESHOLD = 3;
+const SELF_HEAL_WINDOW_MS = 5 * 60 * 1000; // 5 minutes
+
+function recordErrorForSelfHeal(errMsg: string): boolean {
+  const now = Date.now();
+  // Prune old entries
+  while (recentErrors.length > 0 && now - recentErrors[0].ts > SELF_HEAL_WINDOW_MS) {
+    recentErrors.shift();
+  }
+  recentErrors.push({ msg: errMsg, ts: now });
+  // Check if the same error hit threshold
+  const count = recentErrors.filter((e) => e.msg === errMsg).length;
+  if (count >= SELF_HEAL_THRESHOLD) {
+    // Clear the tracker after triggering
+    recentErrors.length = 0;
+    return true; // signal: force session reset
+  }
+  return false;
+}
+
+/**
+ * Strip image-related content from a message for retry.
+ * Removes base64 data URIs, image file references, and [Image: ...] blocks.
+ */
+function stripImagesFromMessage(message: string): string {
+  return message
+    // Remove base64 image data URIs
+    .replace(/data:image\/[^;]+;base64,[A-Za-z0-9+/=]+/g, '[image removed]')
+    // Remove [Image: ...] markers that the bot may inject
+    .replace(/\[Image:[^\]]*\]/gi, '[image removed]')
+    // Remove [Photo] or [Photo: ...] markers
+    .replace(/\[Photo(?::[^\]]*)?\]/gi, '[image removed]')
+    .trim();
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -401,7 +485,14 @@ function sleep(ms: number): Promise<void> {
 /**
  * Run the agent with automatic retry for transient errors.
  * Only retries errors where recovery.shouldRetry is true.
+ * Supports retry strategies:
+ *   - 'normal': standard retry with same message and session
+ *   - 'strip_images_and_retry': remove image content from message
+ *   - 'new_session': retry without a session ID (fresh context)
  * Calls onRetry before each retry so the caller can notify the user.
+ *
+ * Self-heal: if the same error occurs SELF_HEAL_THRESHOLD times within
+ * SELF_HEAL_WINDOW_MS, forces a session reset automatically (Fix 3).
  */
 export async function runAgentWithRetry(
   message: string,
@@ -416,6 +507,8 @@ export async function runAgentWithRetry(
   mcpAllowlist?: string[],
 ): Promise<AgentResult> {
   let lastError: AgentError | undefined;
+  let currentMessage = message;
+  let currentSessionId = sessionId;
 
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     try {
@@ -426,7 +519,7 @@ export async function runAgentWithRetry(
           : model;
 
       return await runAgent(
-        message, sessionId, onTyping, onProgress,
+        currentMessage, currentSessionId, onTyping, onProgress,
         currentModel, abortController, onStreamText,
         mcpAllowlist,
       );
@@ -444,6 +537,30 @@ export async function runAgentWithRetry(
         throw err;
       }
 
+      // Self-heal check (Fix 3): if same error repeats too many times, force new session
+      const forceReset = recordErrorForSelfHeal(err.message);
+      if (forceReset) {
+        logger.warn('Self-heal triggered: same error repeated %d times, forcing session reset', SELF_HEAL_THRESHOLD);
+        currentSessionId = undefined;
+        // Continue to the retry below with cleared session
+      }
+
+      // Apply retry strategy (Fix 1 & 2)
+      const strategy: RetryStrategy = err.recovery.retryStrategy ?? 'normal';
+      if (strategy === 'strip_images_and_retry') {
+        const stripped = stripImagesFromMessage(currentMessage);
+        if (stripped !== currentMessage) {
+          logger.info('Retry strategy: stripped image content from message');
+          currentMessage = stripped;
+        }
+        // Also clear session to avoid poisoned session state
+        currentSessionId = undefined;
+        logger.info('Retry strategy: cleared session to avoid poisoned state');
+      } else if (strategy === 'new_session') {
+        currentSessionId = undefined;
+        logger.info('Retry strategy: starting fresh session');
+      }
+
       const delayMs = Math.min(
         BACKOFF_BASE_MS * Math.pow(BACKOFF_MULTIPLIER, attempt),
         60000,
@@ -452,7 +569,7 @@ export async function runAgentWithRetry(
       const jitter = Math.random() * delayMs * 0.25;
 
       logger.warn(
-        { attempt: attempt + 1, category: err.category, delayMs: Math.round(delayMs + jitter) },
+        { attempt: attempt + 1, category: err.category, strategy, delayMs: Math.round(delayMs + jitter) },
         'Retrying agent query',
       );
 

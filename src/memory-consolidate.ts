@@ -6,6 +6,7 @@ import {
 } from './db.js';
 import { embedText } from './embeddings.js';
 import { logger } from './logger.js';
+import { hasNewContentForConsolidation, clearConsolidationFlag } from './memory-ingest.js';
 
 interface ConsolidationResult {
   summary: string;
@@ -59,6 +60,13 @@ const consolidatingChats = new Set<string>();
 export async function runConsolidation(chatId: string): Promise<void> {
   if (consolidatingChats.has(chatId)) {
     logger.debug({ chatId }, 'Consolidation already running for this chat, skipping');
+    return;
+  }
+
+  // Skip if no new content has been ingested since the last consolidation (B.1 Task 2).
+  // This prevents burning Gemini quota on redundant consolidation runs.
+  if (!hasNewContentForConsolidation()) {
+    logger.debug({ chatId }, 'No new content since last consolidation, skipping');
     return;
   }
 
@@ -154,6 +162,9 @@ export async function runConsolidation(chatId: string): Promise<void> {
     } catch (embErr) {
       logger.warn({ err: embErr, consolidationId }, 'Failed to embed consolidation');
     }
+
+    // Clear the flag so we don't re-run until new content arrives
+    clearConsolidationFlag();
 
     logger.info(
       {

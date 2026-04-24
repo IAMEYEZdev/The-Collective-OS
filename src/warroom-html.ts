@@ -1277,7 +1277,7 @@ function _renderPin() {
   });
 }
 
-var AGENT_LABELS = { main: 'Main', research: 'Research', comms: 'Comms', content: 'Content', ops: 'Ops' };
+var AGENT_LABELS = { main: 'Melanie', research: 'Research', comms: 'Comms', content: 'Content', ops: 'Ops' };
 
 // Switching-in-progress guard so a rapid double-click doesn't spawn two
 // reconnect cycles.
@@ -1297,7 +1297,7 @@ async function togglePin(agentId) {
     // 1. Optimistic UI update
     pinnedAgent = targetAgent;
     _renderPin();
-    var statusLabel = targetAgent ? (AGENT_LABELS[targetAgent] || targetAgent) : 'Main';
+    var statusLabel = targetAgent ? (AGENT_LABELS[targetAgent] || targetAgent) : 'Melanie';
     addTranscriptEntry('system', 'Switching to ' + statusLabel + '...');
     document.getElementById('statusText').textContent = 'switching to ' + statusLabel + '...';
 
@@ -1624,7 +1624,7 @@ window.addEventListener('beforeunload', __warRoomCleanup);
 async function toggleMeeting() {
   var btn = document.getElementById('meetingBtn');
   if (!meetingActive) {
-    var agentLabel = pinnedAgent ? (AGENT_LABELS[pinnedAgent] || pinnedAgent) : 'Main';
+    var agentLabel = pinnedAgent ? (AGENT_LABELS[pinnedAgent] || pinnedAgent) : 'Melanie';
     btn.textContent = 'Setting up ' + agentLabel + '...';
     btn.disabled = true;
     btn.className = 'btn';

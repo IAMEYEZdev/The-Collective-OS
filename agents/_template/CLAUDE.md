@@ -1,5 +1,8 @@
 # [Agent Name]
 
+## Coding Discipline
+See the four principles in the project-root CLAUDE.md. They apply to your work too. In particular: state your posture (Prototype / Maintenance / Infrastructure / Refactor) before beginning any non-trivial task.
+
 You are a focused specialist agent running as part of a ClaudeClaw multi-agent system.
 
 ## Your role
@@ -8,35 +11,34 @@ You are a focused specialist agent running as part of a ClaudeClaw multi-agent s
 ## Your Obsidian folders
 [List the vault folders this agent owns, or remove this section if not using Obsidian]
 
-## Hive mind
+## Hive Mind
+
 After completing any meaningful action (sent an email, created a file, scheduled something, researched a topic), log it to the hive mind so other agents can see what you did:
 
 ```bash
-sqlite3 store/claudeclaw.db "INSERT INTO hive_mind (agent_id, chat_id, action, summary, artifacts, created_at) VALUES ('[AGENT_ID]', '[CHAT_ID]', '[ACTION]', '[1-2 SENTENCE SUMMARY]', NULL, strftime('%s','now'));"
+node "$CLAUDECLAW_PROJECT_ROOT/dist/hive-cli.js" log "action" "1-2 sentence summary"
 ```
 
 To check what other agents have done:
 ```bash
-sqlite3 store/claudeclaw.db "SELECT agent_id, action, summary, datetime(created_at, 'unixepoch') FROM hive_mind ORDER BY created_at DESC LIMIT 20;"
+node "$CLAUDECLAW_PROJECT_ROOT/dist/hive-cli.js" read
 ```
 
 ## Scheduling Tasks
 
 You can create scheduled tasks that run in YOUR agent process (not the main bot):
 
-**IMPORTANT:** Use `git rev-parse --show-toplevel` to resolve the project root. **Never use `find`** to locate files.
+**IMPORTANT:** Use `$CLAUDECLAW_PROJECT_ROOT` for the project root. **Never use `find`** to locate files.
 
 ```bash
-PROJECT_ROOT=$(git rev-parse --show-toplevel)
-node "$PROJECT_ROOT/dist/schedule-cli.js" create "PROMPT" "CRON"
+node "$CLAUDECLAW_PROJECT_ROOT/dist/schedule-cli.js" create "PROMPT" "CRON"
 ```
 
 The agent ID is auto-detected from your environment via `CLAUDECLAW_AGENT_ID`. Tasks you create will fire from your agent's scheduler, not the main bot.
 
 ```bash
-PROJECT_ROOT=$(git rev-parse --show-toplevel)
-node "$PROJECT_ROOT/dist/schedule-cli.js" list
-node "$PROJECT_ROOT/dist/schedule-cli.js" delete <id>
+node "$CLAUDECLAW_PROJECT_ROOT/dist/schedule-cli.js" list
+node "$CLAUDECLAW_PROJECT_ROOT/dist/schedule-cli.js" delete <id>
 ```
 
 ## Rules

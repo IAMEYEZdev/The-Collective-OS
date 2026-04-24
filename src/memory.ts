@@ -1,4 +1,6 @@
-import { agentObsidianConfig, GOOGLE_API_KEY, MEMORY_NUDGE_INTERVAL_TURNS, MEMORY_NUDGE_INTERVAL_HOURS } from './config.js';
+import { agentObsidianConfig, CLAUDECLAW_CONFIG, GOOGLE_API_KEY, MEMORY_NUDGE_INTERVAL_TURNS, MEMORY_NUDGE_INTERVAL_HOURS } from './config.js';
+import fs from 'node:fs';
+import path from 'node:path';
 import {
   batchUpdateMemoryRelevance,
   decayMemories,
@@ -19,7 +21,7 @@ import {
 import { cosineSimilarity, embedText } from './embeddings.js';
 import { generateContent, parseJsonResponse } from './gemini.js';
 import { logger } from './logger.js';
-import { ingestConversationTurn } from './memory-ingest.js';
+import { queueForIngestion, isTrivialMessage } from './memory-ingest.js';
 import { buildObsidianContext } from './obsidian.js';
 
 /**
@@ -133,6 +135,18 @@ export async function buildMemoryContext(
     parts.push(blocks.join('\n'));
   }
 
+  // Layer 3.5: Shared operator context (loaded from CLAUDECLAW_CONFIG/operator-context.md)
+  // This gives ALL agents access to the same operator objectives and team mental model.
+  const operatorCtxPath = path.join(CLAUDECLAW_CONFIG, 'operator-context.md');
+  try {
+    const opCtx = fs.readFileSync(operatorCtxPath, 'utf-8').trim();
+    if (opCtx) {
+      parts.push(`[Operator context — shared across all agents]\n${opCtx}\n[End operator context]`);
+    }
+  } catch {
+    // No operator-context.md — that's fine, it's optional
+  }
+
   // Layer 4: Cross-agent activity awareness
   const teamActivity = getOtherAgentActivity(agentId, 24, 10);
   if (teamActivity.length > 0) {
@@ -193,11 +207,10 @@ export function saveConversationTurn(
     logger.error({ err }, 'Failed to log conversation turn');
   }
 
-  // Fire-and-forget: LLM-powered memory extraction via Gemini
-  // This runs async and never blocks the user's response
-  void ingestConversationTurn(chatId, userMessage, claudeResponse, agentId).catch((err) => {
-    logger.error({ err }, 'Memory ingestion fire-and-forget failed');
-  });
+  // Queue for batched memory extraction via Gemini (B.1 Task 2).
+  // Turns accumulate in a buffer and flush every 5 turns or 3 minutes idle.
+  // This reduces Gemini API calls by ~60-70%.
+  queueForIngestion(chatId, userMessage, claudeResponse, agentId);
 }
 
 /**
@@ -235,6 +248,13 @@ export async function evaluateMemoryRelevance(
   assistantResponse: string,
 ): Promise<void> {
   if (surfacedMemoryIds.length === 0 || !GOOGLE_API_KEY) return;
+
+  // Skip relevance evaluation on trivial messages (B.1 Task 2).
+  // These carry no signal about which memories were useful.
+  if (isTrivialMessage(userMessage)) {
+    logger.debug({ msg: userMessage.slice(0, 30) }, 'Skipping relevance eval for trivial message');
+    return;
+  }
 
   try {
     // Build a list of memories with their content so Gemini can actually judge

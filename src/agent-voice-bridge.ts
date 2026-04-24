@@ -19,6 +19,7 @@ import { readEnvFile } from './env.js';
 import { initDatabase, getSession, setSession } from './db.js';
 import { buildMemoryContext } from './memory.js';
 import { loadMcpServers } from './agent.js';
+import { resolveAgentDir } from './agent-config.js';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -103,14 +104,13 @@ async function main() {
       throw new Error(`Invalid agent ID: ${agentId}`);
     }
 
-    // Resolve agent directory and verify it's within the project
+    // Resolve agent directory using the same logic as the main bot.
+    // resolveAgentDir checks CLAUDECLAW_CONFIG/agents/<id> first, then
+    // falls back to PROJECT_ROOT/agents/<id>. This ensures agents stored
+    // in ~/.claudeclaw/ (like Jackson/custom) are found correctly.
     const agentDir = agentId === 'main'
       ? PROJECT_ROOT
-      : path.join(PROJECT_ROOT, 'agents', agentId);
-    const resolved = path.resolve(agentDir);
-    if (!resolved.startsWith(path.resolve(PROJECT_ROOT) + path.sep) && resolved !== path.resolve(PROJECT_ROOT)) {
-      throw new Error(`Agent path outside project: ${resolved}`);
-    }
+      : resolveAgentDir(agentId);
 
     // Read the agent's MCP allowlist from its agent.yaml (if present). The
     // text bot does this via loadAgentConfig in src/bot.ts; we do a minimal

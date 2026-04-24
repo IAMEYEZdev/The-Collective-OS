@@ -19,10 +19,19 @@ import { formatForTelegram, splitMessage } from './bot.js';
 
 type Sender = (text: string) => Promise<void>;
 
-/** Max time (ms) a scheduled task can run before being killed. */
-const TASK_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
+/** Max time (ms) a scheduled/mission task can run before being killed. Configurable via TASK_TIMEOUT_MINUTES in .env. */
+const TASK_TIMEOUT_MS = (parseInt(process.env.TASK_TIMEOUT_MINUTES || '25', 10)) * 60 * 1000;
 
 let sender: Sender;
+
+/**
+ * Tracks whether tasks were recovered from a crash on this startup.
+ * The bot checks this to inject a "confirm before resuming" hint
+ * into the first user message after recovery (Fix 6).
+ */
+let _crashRecoveryCount = 0;
+export function getCrashRecoveryCount(): number { return _crashRecoveryCount; }
+export function clearCrashRecoveryFlag(): void { _crashRecoveryCount = 0; }
 
 /**
  * In-memory set of task IDs currently being executed.
@@ -47,10 +56,12 @@ export function initScheduler(send: Sender, agentId = 'main'): void {
   const recovered = resetStuckTasks(agentId);
   if (recovered > 0) {
     logger.warn({ recovered, agentId }, 'Reset stuck tasks from previous crash');
+    _crashRecoveryCount += recovered;
   }
   const recoveredMission = resetStuckMissionTasks(agentId);
   if (recoveredMission > 0) {
     logger.warn({ recovered: recoveredMission, agentId }, 'Reset stuck mission tasks from previous crash');
+    _crashRecoveryCount += recoveredMission;
   }
 
   setInterval(() => void runDueTasks(), 60_000);

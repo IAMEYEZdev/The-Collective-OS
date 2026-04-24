@@ -4,6 +4,7 @@ import { streamSSE } from 'hono/streaming';
 import { serve } from '@hono/node-server';
 
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import { AGENT_ID, ALLOWED_CHAT_ID, DASHBOARD_PORT, DASHBOARD_TOKEN, PROJECT_ROOT, STORE_DIR, WHATSAPP_ENABLED, SLACK_USER_TOKEN, CONTEXT_LIMIT, agentDefaultModel } from './config.js';
 import crypto from 'crypto';
@@ -198,7 +199,7 @@ export function startDashboard(botApi?: Api<RawApi>): void {
     if (!fs.existsSync(avatarPath)) return c.text('', 404);
     const data = fs.readFileSync(avatarPath);
     return new Response(data, {
-      headers: { 'Content-Type': 'image/png', 'Cache-Control': 'public, max-age=86400' },
+      headers: { 'Content-Type': 'image/png', 'Cache-Control': 'no-cache' },
     });
   });
 
@@ -276,7 +277,7 @@ export function startDashboard(botApi?: Api<RawApi>): void {
     const ids = ['main', ...listAgentIds().filter((id) => id !== 'main')];
     const agents = ids.map((id) => {
       try {
-        if (id === 'main') return { id: 'main', name: 'Main', description: 'General ops and triage' };
+        if (id === 'main') return { id: 'main', name: 'Melanie', description: 'General ops and triage' };
         const cfg = loadAgentConfig(id);
         return { id, name: cfg.name || id, description: cfg.description || '' };
       } catch {
@@ -322,7 +323,7 @@ export function startDashboard(botApi?: Api<RawApi>): void {
   // read the state without needing an IPC bus. router.py checks this
   // file's mtime and reloads only when it changes. Spoken agent prefixes
   // (e.g. "research, find X") still take precedence over the pin.
-  const WARROOM_PIN_PATH = '/tmp/warroom-pin.json';
+  const WARROOM_PIN_PATH = path.join(os.tmpdir(), 'warroom-pin.json');
   const VALID_PIN_AGENTS = new Set(['main', ...listAgentIds()]);
   const VALID_PIN_MODES = new Set(['direct', 'auto']);
 

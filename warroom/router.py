@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import re
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -32,7 +33,7 @@ logger = logging.getLogger("warroom.router")
 # Shared state with the dashboard (src/dashboard.ts POST /api/warroom/pin).
 # Writing via the dashboard; reading here. The Pipecat server and the Hono
 # dashboard are separate processes, so we use this tiny file as IPC.
-PIN_PATH = Path("/tmp/warroom-pin.json")
+PIN_PATH = Path(tempfile.gettempdir()) / "warroom-pin.json"
 
 
 # Agent identifiers that match the agents/ directory names

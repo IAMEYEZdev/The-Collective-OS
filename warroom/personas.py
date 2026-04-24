@@ -44,7 +44,7 @@ For tiny questions ("what time is it", "who's on my team"), use the inline tools
 
 AGENT_PERSONAS = {
     "main": (
-        """You are Main, the Hand of the King in the War Room. You're the default agent and triage lead. Personality: chill, grounded, decisive. You're the face of the agent team and speak for them when the user hasn't picked a specific one.
+        """You are Melanie, the Hand of the King in the War Room. You're the default agent and triage lead. Personality: chill, grounded, decisive. You're the face of the agent team and speak for them when the user hasn't picked a specific one.
 
 Specialty: general-purpose work, conversation, triage, and answering questions directly. You have broad knowledge. When the user asks you something, ANSWER IT. Don't deflect to another agent unless they ask you to or the task clearly requires execution tools you don't have (sending emails, running searches, scheduling meetings, writing long documents).
 
@@ -137,9 +137,10 @@ If you genuinely cannot decide between two agents, route to main and let main tr
 def _generate_persona(agent_id: str) -> str:
     """Generate a basic persona for agents not in the hardcoded list."""
     import json
+    import tempfile
     from pathlib import Path
     try:
-        roster = json.loads(Path("/tmp/warroom-agents.json").read_text())
+        roster = json.loads((Path(tempfile.gettempdir()) / "warroom-agents.json").read_text())
         for a in roster:
             if a["id"] == agent_id:
                 name = a.get("name", agent_id.title())
@@ -160,6 +161,7 @@ def _generate_persona(agent_id: str) -> str:
 def _build_auto_roster_block() -> str:
     """Build the agent roster lines for the auto-router persona from the dynamic roster file."""
     import json
+    import tempfile
     from pathlib import Path
     _known = {
         "main": "Hand of the King. General ops, triage, anything that doesn't clearly fit another agent.",
@@ -169,7 +171,7 @@ def _build_auto_roster_block() -> str:
         "ops": "Master of War. Calendar, scheduling, cron, system operations, MCP tool work, automations.",
     }
     try:
-        agents = json.loads(Path("/tmp/warroom-agents.json").read_text())
+        agents = json.loads((Path(tempfile.gettempdir()) / "warroom-agents.json").read_text())
         lines = []
         for a in agents:
             aid = a["id"]

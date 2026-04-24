@@ -29,11 +29,13 @@ import {
   DAILY_COST_BUDGET,
   HOURLY_TOKEN_BUDGET,
   PROJECT_ROOT,
+  AGENT_MAX_TURNS,
 } from './config.js';
 import { clearSession, getRecentConversation, getRecentMemories, getRecentTaskOutputs, getSession, getSessionConversation, logToHiveMind, pinMemory, unpinMemory, setSession, lookupWaChatId, saveWaMessageMap, saveTokenUsage, saveCompactionEvent, getCompactionCount } from './db.js';
 import { logger } from './logger.js';
 import { downloadMedia, buildPhotoMessage, buildDocumentMessage, buildVideoMessage } from './media.js';
 import { buildMemoryContext, evaluateMemoryRelevance, saveConversationTurn, shouldNudgeMemory, MEMORY_NUDGE_TEXT } from './memory.js';
+import { flushIngestionBuffer } from './memory-ingest.js';
 import { classifyMessageComplexity } from './message-classifier.js';
 import { scanForSecrets, redactSecrets } from './exfiltration-guard.js';
 import { trackUsage, getRateStatus } from './rate-tracker.js';
@@ -41,6 +43,7 @@ import { buildCostFooter } from './cost-footer.js';
 import { setHighImportanceCallback } from './memory-ingest.js';
 import { messageQueue } from './message-queue.js';
 import { parseDelegation, delegateToAgent, getAvailableAgents } from './orchestrator.js';
+import { getCrashRecoveryCount, clearCrashRecoveryFlag } from './scheduler.js';
 import { emitChatEvent, setProcessing, setActiveAbort, abortActiveQuery } from './state.js';
 import {
   isLocked,
@@ -490,6 +493,18 @@ async function handleMessage(ctx: Context, message: string, forceVoiceReply = fa
     parts.push(MEMORY_NUDGE_TEXT);
   }
 
+  // Fix 6: After crash recovery, warn the agent not to auto-resume deferred tasks.
+  // The agent should confirm with the user before resuming any pre-crash work.
+  const recoveredTaskCount = getCrashRecoveryCount();
+  if (recoveredTaskCount > 0) {
+    parts.push(
+      `[Post-recovery notice] ${recoveredTaskCount} task(s) were recovered from a previous crash. ` +
+      `Do NOT auto-execute any deferred or previously-pending work. If there was a task in progress ` +
+      `before the crash, confirm with the user before resuming it. Answer the current message directly.`,
+    );
+    clearCrashRecoveryFlag();
+  }
+
   parts.push(message);
   const fullMessage = parts.join('\n\n');
 
@@ -617,6 +632,26 @@ async function handleMessage(ctx: Context, message: string, forceVoiceReply = fa
     }
 
     let rawResponse = result.text?.trim() || 'Done.';
+
+    // Turn-limit detection (B.2 Fix 1): surface an honest message instead of
+    // the misleading "Done." when the agent was cut off mid-task.
+    if (result.hitTurnLimit) {
+      const turnsUsed = result.numTurns ?? AGENT_MAX_TURNS;
+      if (rawResponse && rawResponse !== 'Done.') {
+        // Agent produced partial output before being cut off
+        rawResponse += `\n\n---\nI hit my turn limit (${turnsUsed} turns) before finishing. The above is what I got done. Send a follow-up to continue where I left off.`;
+      } else {
+        // No meaningful output
+        rawResponse = `I hit my turn limit (${turnsUsed} turns) before producing a result. This task may need to be broken into smaller steps, or you can send a follow-up to continue.`;
+      }
+      logger.warn({ turnsUsed }, 'Agent response truncated by turn limit');
+    }
+
+    // Long-task checkpoint suggestion (B.2 Fix 4): nudge the user after
+    // high-turn-count runs that completed successfully.
+    if (!result.hitTurnLimit && result.numTurns && result.numTurns > 40) {
+      rawResponse += `\n\n(That was a long one — ${result.numTurns} turns. Might be a good time to checkpoint.)`;
+    }
 
     // Exfiltration guard: scan for leaked secrets before sending to Telegram
     if (EXFILTRATION_GUARD_ENABLED) {
@@ -757,9 +792,19 @@ async function handleMessage(ctx: Context, message: string, forceVoiceReply = fa
         'Agent error (classified)',
       );
       await ctx.reply(err.recovery.userMessage);
+
+      // For poison-payload errors, proactively clear the session so the
+      // next message doesn't re-trigger the same failure (Fix 2).
+      if (err.category === 'bad_image' || err.category === 'bad_payload') {
+        setSession(chatIdStr, undefined as any, AGENT_ID);
+        logger.warn({ category: err.category }, 'Session cleared to quarantine poison payload');
+      }
     } else {
+      const errMsg = err instanceof Error ? err.message : String(err);
       logger.error({ err }, 'Agent error (unclassified)');
-      await ctx.reply('Something went wrong. Check the logs and try again.');
+      await ctx.reply(
+        `An unexpected error occurred: "${errMsg.slice(0, 120)}". Try sending your message again, or use /newchat if it keeps happening.`,
+      );
     }
   }
 }
@@ -961,6 +1006,9 @@ export function createBot(): Bot {
       })();
     }
 
+    // Flush ingestion buffer on session boundary (B.1 Task 2)
+    void flushIngestionBuffer().catch((err) => logger.warn({ err }, 'Buffer flush on /newchat failed'));
+
     clearSession(chatIdStr, AGENT_ID);
     sessionBaseline.delete(chatIdStr);
     await ctx.reply('Session cleared. Starting fresh.');
@@ -1091,6 +1139,7 @@ export function createBot(): Bot {
   // /forget — clear session (memory decay handles the rest)
   bot.command('forget', async (ctx) => {
     if (await replyIfLocked(ctx)) return;
+    void flushIngestionBuffer().catch((err) => logger.warn({ err }, 'Buffer flush on /forget failed'));
     clearSession(ctx.chat!.id.toString(), AGENT_ID);
     await ctx.reply('Session cleared. Memories will fade naturally over time.');
   });
@@ -1654,7 +1703,21 @@ async function processDashboardMessage(
       setSession(chatIdStr, result.newSessionId, AGENT_ID);
     }
 
-    const rawResponse = result.text?.trim() || 'Done.';
+    let rawResponse = result.text?.trim() || 'Done.';
+
+    // Turn-limit detection (B.2) for dashboard path
+    if (result.hitTurnLimit) {
+      const turnsUsed = result.numTurns ?? AGENT_MAX_TURNS;
+      if (rawResponse && rawResponse !== 'Done.') {
+        rawResponse += `\n\n---\nI hit my turn limit (${turnsUsed} turns) before finishing. Send a follow-up to continue.`;
+      } else {
+        rawResponse = `I hit my turn limit (${turnsUsed} turns) before producing a result. Try breaking it into smaller steps.`;
+      }
+    }
+
+    if (!result.hitTurnLimit && result.numTurns && result.numTurns > 40) {
+      rawResponse += `\n\n(That was a long one — ${result.numTurns} turns. Might be a good time to checkpoint.)`;
+    }
 
     // Save conversation turn
     saveConversationTurn(chatIdStr, text, rawResponse, result.newSessionId ?? sessionId, AGENT_ID);
