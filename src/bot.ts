@@ -615,12 +615,20 @@ async function handleMessage(ctx: Context, message: string, forceVoiceReply = fa
       try { await ctx.api.deleteMessage(chatId, streamMsgId); } catch { /* best effort */ }
     }
 
-    // Handle abort (manual /stop or timeout)
+    // Handle abort (manual /stop or timeout or interrupt flag)
     if (result.aborted) {
       setProcessing(chatIdStr, false);
-      const msg = result.text === null
-        ? `Timed out after ${Math.round(AGENT_TIMEOUT_MS / 1000)}s. The task may have been too complex or a command got stuck. Try breaking it into smaller steps.`
-        : 'Stopped.';
+      let msg: string;
+      if (result.interruptReason) {
+        // Interrupt flag halt — constitutional safety message
+        const tool = result.interruptedTool ?? 'unknown';
+        const reason = result.interruptReason;
+        msg = `🛑 HALTED (harness interrupt)\nReason: ${reason}\nLast detected tool: ${tool}\nState: flag file at C:\\Users\\windows\\hive\\control\\interrupt.flag triggered this halt\nTo resume: run Resume-Melanie in PowerShell, then send the agent a new instruction.`;
+      } else if (result.text === null) {
+        msg = `Timed out after ${Math.round(AGENT_TIMEOUT_MS / 1000)}s. The task may have been too complex or a command got stuck. Try breaking it into smaller steps.`;
+      } else {
+        msg = 'Stopped.';
+      }
       emitChatEvent({ type: 'assistant_message', chatId: chatIdStr, content: msg, source: 'telegram' });
       await ctx.reply(msg);
       return;
@@ -1690,11 +1698,18 @@ async function processDashboardMessage(
     clearTimeout(dashTimeout);
     setActiveAbort(chatIdStr, null);
 
-    // Handle abort
+    // Handle abort (manual /stop or timeout or interrupt flag)
     if (result.aborted) {
-      const msg = result.text === null
-        ? `Timed out after ${Math.round(AGENT_TIMEOUT_MS / 1000)}s. Try breaking the task into smaller steps.`
-        : 'Stopped.';
+      let msg: string;
+      if (result.interruptReason) {
+        const tool = result.interruptedTool ?? 'unknown';
+        const reason = result.interruptReason;
+        msg = `🛑 HALTED (harness interrupt)\nReason: ${reason}\nLast detected tool: ${tool}\nState: flag file at C:\\Users\\windows\\hive\\control\\interrupt.flag triggered this halt\nTo resume: run Resume-Melanie in PowerShell, then send the agent a new instruction.`;
+      } else if (result.text === null) {
+        msg = `Timed out after ${Math.round(AGENT_TIMEOUT_MS / 1000)}s. Try breaking the task into smaller steps.`;
+      } else {
+        msg = 'Stopped.';
+      }
       emitChatEvent({ type: 'assistant_message', chatId: chatIdStr, content: msg, source: 'dashboard' });
       return;
     }

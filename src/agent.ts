@@ -169,6 +169,35 @@ export interface AgentResult {
   hitTurnLimit?: boolean;
   /** Number of agentic turns the SDK executed. */
   numTurns?: number;
+  /** Set when the agent was halted by the interrupt flag file. */
+  interruptReason?: string;
+  /** The tool that was about to execute when the interrupt fired. */
+  interruptedTool?: string;
+}
+
+// ── Interrupt flag check ─────────────────────────────────────────────
+// Constitutional safety hook: checks for a flag file before every tool
+// call. If the flag exists, the agent halts immediately.
+
+const INTERRUPT_FLAG_PATH = path.join(
+  process.env.HOME || process.env.USERPROFILE || '',
+  'hive', 'control', 'interrupt.flag',
+);
+
+/**
+ * Check if the interrupt flag file exists and return the reason if so.
+ * Returns null if no interrupt is requested.
+ * Fails safe: any error reading the file returns null (no interrupt).
+ */
+function checkInterruptFlag(): string | null {
+  try {
+    if (!fs.existsSync(INTERRUPT_FLAG_PATH)) return null;
+    const content = fs.readFileSync(INTERRUPT_FLAG_PATH, 'utf-8').trim();
+    return content || 'user_requested';
+  } catch {
+    // Fail safe: broken flag file or missing directory = no interrupt
+    return null;
+  }
 }
 
 /**
@@ -240,6 +269,8 @@ export async function runAgent(
   let streamedText = '';
   let hitTurnLimit = false;
   let numTurns: number | undefined;
+  let interruptReason: string | undefined;
+  let interruptedTool: string | undefined;
 
   // Refresh typing indicator on an interval while Claude works.
   // Telegram's "typing..." action expires after ~5s.
@@ -328,12 +359,30 @@ export async function runAgent(
         }
 
         // Extract tool_use blocks from assistant content for progress reporting
-        if (onProgress) {
-          const content = msg?.['content'] as Array<{ type: string; name?: string }> | undefined;
-          if (Array.isArray(content)) {
-            for (const block of content) {
-              if (block.type === 'tool_use' && block.name) {
+        // and check interrupt flag before tool dispatch.
+        const content = msg?.['content'] as Array<{ type: string; name?: string }> | undefined;
+        if (Array.isArray(content)) {
+          for (const block of content) {
+            if (block.type === 'tool_use' && block.name) {
+              if (onProgress) {
                 onProgress({ type: 'tool_active', description: toolLabel(block.name) });
+              }
+
+              // ── Interrupt flag check (Layer 2 constitutional safety) ──
+              // Check BEFORE the SDK dispatches this tool. If the flag
+              // exists, abort immediately so the tool never executes.
+              const flagReason = checkInterruptFlag();
+              if (flagReason) {
+                interruptReason = flagReason;
+                interruptedTool = block.name;
+                logger.warn(
+                  { reason: flagReason, tool: block.name },
+                  'Interrupt flag detected — halting agent before tool dispatch',
+                );
+                if (abortController) {
+                  abortController.abort();
+                }
+                break;
               }
             }
           }
@@ -416,6 +465,10 @@ export async function runAgent(
     }
   } catch (err) {
     if (abortController?.signal.aborted) {
+      if (interruptReason) {
+        logger.info({ reason: interruptReason, tool: interruptedTool }, 'Agent halted by interrupt flag');
+        return { text: null, newSessionId, usage, aborted: true, interruptReason, interruptedTool };
+      }
       logger.info('Agent query aborted by user');
       return { text: null, newSessionId, usage, aborted: true };
     }
