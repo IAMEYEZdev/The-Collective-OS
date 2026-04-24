@@ -73,3 +73,6 @@ ghl-*.cjs
 gcal-*.cjs
 cdp-test.cjs
 open-dashboard.cjs
+
+# Contains credentials - never commit
+.mcp.json
