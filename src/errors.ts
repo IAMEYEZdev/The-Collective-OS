@@ -97,6 +97,8 @@ const NETWORK_PATTERNS = [
   'dns',
   'fetch failed',
   'certificate',
+  'connectionrefused',
+  'unable to connect',
 ];
 
 const TIMEOUT_PATTERNS = [
