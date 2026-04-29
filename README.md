@@ -84,8 +84,7 @@ Follow these steps in order. The whole thing takes about 5 minutes.
 |-------------|-------|
 | **Node.js 20+** | Check: `node --version`. Download at [nodejs.org](https://nodejs.org) |
 | **Git** | Check: `git --version`. If you've never used git, also run the two commands below |
-| **Claude Code CLI** | Install: `npm i -g @anthropic-ai/claude-code` |
-| **Claude account** | Log in: `claude login` (free, Pro, or Max plan) |
+| **Agent provider** | OpenCode (`opencode auth login`) or Claude Code (`claude login`) |
 | **Telegram account** | Any existing account works |
 
 **First time using git?** Run these two commands first (use your own name and email):
@@ -136,7 +135,8 @@ npm run setup
 
 The wizard walks you through everything interactively:
 
-- Checks your environment (Node, Claude CLI, builds if needed)
+- Checks your environment (Node, selected provider CLI, builds if needed)
+- Lets you choose OpenCode or Claude. Change it later with `npm run provider:setup`
 - Asks which features you want (voice, video, War Room, WhatsApp)
 - Sets up your Telegram bot token and auto-detects your chat ID
 - **Configures security**: PIN lock, emergency kill phrase, idle auto-lock
@@ -509,7 +509,8 @@ Every skill in `~/.claude/skills/` loads on every session. Call them directly (`
 |---------|-------------|
 | `/help` | List all available commands |
 | `/stop` | Cancel the current agent query mid-execution. works from Telegram and the dashboard |
-| `/model` | Switch Claude model for this chat. `/model haiku` for speed, `/model sonnet` for balance, `/model opus` (default) for full power. Resets on restart |
+| `/model` | Switch Claude model for this chat when the active provider is Claude |
+| `/provider` | Show the active provider and where its model is selected |
 | `/voice` | Toggle voice replies on/off for all messages. When off, voice notes still get transcribed and executed. replies just come back as text |
 | `/newchat` | Wipe the Claude Code session and start fresh. Use when context gets stale or the conversation window is filling up |
 | `/respin` | Pull the last 20 conversation turns back into a fresh session. Run this right after `/newchat` to keep recent context without the full token weight |
@@ -1914,7 +1915,8 @@ For each agent, you need two files in `agents/<name>/`:
 name: Comms
 description: Email, Slack, WhatsApp, YouTube comments, community forums, LinkedIn
 telegram_bot_token_env: COMMS_BOT_TOKEN
-model: claude-sonnet-4-6
+provider:
+  type: opencode
 
 # Optional: auto-inject open tasks from your Obsidian vault
 obsidian:

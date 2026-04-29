@@ -4,7 +4,9 @@ import { streamSSE } from 'hono/streaming';
 import { serve } from '@hono/node-server';
 
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
+import { spawnSync } from 'child_process';
 import { AGENT_ID, ALLOWED_CHAT_ID, DASHBOARD_PORT, DASHBOARD_TOKEN, DASHBOARD_URL, PROJECT_ROOT, STORE_DIR, WHATSAPP_ENABLED, SLACK_USER_TOKEN, CONTEXT_LIMIT, agentDefaultModel, CLAUDECLAW_CONFIG } from './config.js';
 import crypto from 'crypto';
 import {
@@ -68,7 +70,17 @@ import {
 import { computeNextRun } from './scheduler.js';
 import { generateContent, parseJsonResponse } from './gemini.js';
 import { getSecurityStatus } from './security.js';
-import { AGENT_ID_RE, agentExists, listAgentIds, loadAgentConfig, resolveAgentDir, setAgentModel } from './agent-config.js';
+import {
+  AGENT_ID_RE,
+  agentExists,
+  listAgentIds,
+  loadAgentConfig,
+  resolveAgentDir,
+  setAgentModel,
+  setAgentProvider,
+  getMainDescription,
+  setMainDescription,
+} from './agent-config.js';
 import {
   resolveAgentAvatar,
   avatarEtag,
@@ -90,6 +102,13 @@ import {
   suggestBotNames,
   isAgentRunning,
 } from './agent-create.js';
+import {
+  DEFAULT_CLAUDE_MODEL,
+  ProviderConfig,
+  getMainProviderConfig,
+  normalizeProviderConfig,
+  setMainProviderConfig,
+} from './provider.js';
 import { getMainModelOverride, processMessageFromDashboard } from './bot.js';
 import { getDashboardHtml } from './dashboard-html.js';
 import { getWarRoomHtml } from './warroom-html.js';
@@ -112,6 +131,41 @@ import { WARROOM_ENABLED, WARROOM_PORT } from './config.js';
 import { logger } from './logger.js';
 import { getTelegramConnected, getBotInfo, chatEvents, getIsProcessing, abortActiveQuery, ChatEvent } from './state.js';
 import { killProcess, isProcessAlive, findProcessesByPattern } from './platform.js';
+
+const CLAUDE_MODEL_OPTIONS = [
+  { id: 'claude-opus-4-6', label: 'Opus 4.6' },
+  { id: 'claude-sonnet-4-6', label: 'Sonnet 4.6' },
+  { id: 'claude-sonnet-4-5', label: 'Sonnet 4.5' },
+  { id: 'claude-haiku-4-5', label: 'Haiku 4.5' },
+];
+
+function stripAnsi(s: string): string {
+  return s.replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, '');
+}
+
+function getOpenCodeModels(): Array<{ id: string; label: string }> {
+  const result = spawnSync('opencode', ['models'], { stdio: 'pipe', encoding: 'utf-8' });
+  if (result.status !== 0) return [];
+  return stripAnsi(result.stdout)
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => /^[a-z0-9._-]+\/[a-z0-9._-]+$/i.test(line))
+    .map((id) => ({ id, label: id }));
+}
+
+function getOpenCodeDefaultModel(): string | undefined {
+  const configPath = path.join(os.homedir(), '.config', 'opencode', 'opencode.jsonc');
+  if (!fs.existsSync(configPath)) return undefined;
+  try {
+    const content = fs.readFileSync(configPath, 'utf-8')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/^\s*\/\/.*$/gm, '');
+    const raw = JSON.parse(content) as Record<string, unknown>;
+    return typeof raw.model === 'string' ? raw.model : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 async function classifyTaskAgent(prompt: string): Promise<string | null> {
   const agentIds = listAgentIds();
@@ -1916,11 +1970,16 @@ export function buildDashboardApp(botApi?: Api<RawApi>): Hono {
         }
         const stats = getAgentTokenStats(id);
         const mainOverride = id === 'main' ? getMainModelOverride() : undefined;
+        const provider = id === 'main' ? getMainProviderConfig() : config.provider;
+        const model = provider.type === 'claude'
+          ? (mainOverride ?? provider.model ?? config.model ?? DEFAULT_CLAUDE_MODEL)
+          : undefined;
         return {
           id,
           name: config.name,
           description: config.description,
-          model: mainOverride ?? config.model ?? 'claude-opus-4-6',
+          model,
+          provider,
           running,
           todayTurns: stats.todayTurns,
           todayCost: stats.todayCost,
@@ -1930,7 +1989,7 @@ export function buildDashboardApp(botApi?: Api<RawApi>): Hono {
           avatar_etag: avatarEtagForId(id),
         };
       } catch {
-        return { id, name: id, description: '', model: 'unknown', running: false, todayTurns: 0, todayCost: 0, avatar_etag: avatarEtagForId(id) };
+        return { id, name: id, description: '', model: 'unknown', provider: { type: 'opencode' }, running: false, todayTurns: 0, todayCost: 0, avatar_etag: avatarEtagForId(id) };
       }
     });
 
@@ -1944,8 +2003,19 @@ export function buildDashboardApp(botApi?: Api<RawApi>): Hono {
       } catch { /* not running */ }
     }
     const mainStats = getAgentTokenStats('main');
+    const mainProvider = getMainProviderConfig();
     const allAgents = [
-      { id: 'main', name: 'Main', description: 'Primary ClaudeClaw bot', model: getMainModelOverride() ?? 'claude-opus-4-6', running: mainRunning, todayTurns: mainStats.todayTurns, todayCost: mainStats.todayCost, avatar_etag: avatarEtagForId('main') },
+      {
+        id: 'main',
+        name: 'Main',
+        description: getMainDescription(),
+        model: mainProvider.type === 'claude' ? (getMainModelOverride() ?? mainProvider.model ?? DEFAULT_CLAUDE_MODEL) : undefined,
+        provider: mainProvider,
+        running: mainRunning,
+        todayTurns: mainStats.todayTurns,
+        todayCost: mainStats.todayCost,
+        avatar_etag: avatarEtagForId('main'),
+      },
       ...agents,
     ];
 
@@ -1993,13 +2063,13 @@ export function buildDashboardApp(botApi?: Api<RawApi>): Hono {
     const restartRequired: string[] = [];
     for (const id of agentIds) {
       try {
-        setAgentModel(id, model);
+        setAgentProvider(id, { type: 'claude', model });
         updated.push(id);
-        // Yaml is now updated, but a sub-agent's already-running process
-        // froze its model at startup. Flag for the UI to offer a restart.
         if (id !== 'main') restartRequired.push(id);
       } catch {}
     }
+    setMainProviderConfig({ type: 'claude', model });
+    updated.unshift('main');
     return c.json({ ok: true, model, updated, restartRequired });
   });
 
@@ -2018,6 +2088,7 @@ export function buildDashboardApp(botApi?: Api<RawApi>): Hono {
         // Main applies in-memory immediately — no restart needed.
         const { setMainModelOverride } = await import('./bot.js');
         setMainModelOverride(model);
+        setMainProviderConfig({ type: 'claude', model });
         return c.json({ ok: true, agent: agentId, model, restartRequired: false });
       }
       // Sub-agents read agentDefaultModel into config.ts module state once
@@ -2025,10 +2096,62 @@ export function buildDashboardApp(botApi?: Api<RawApi>): Hono {
       // process restarts. We don't auto-restart because that would kill any
       // in-flight mission task or Telegram turn — surface the requirement
       // so the UI can prompt deliberately.
-      setAgentModel(agentId, model);
+      setAgentProvider(agentId, { type: 'claude', model });
       return c.json({ ok: true, agent: agentId, model, restartRequired: true });
     } catch (err) {
       return c.json({ error: 'Failed to update model' }, 500);
+    }
+  });
+
+  app.get('/api/providers/models', (c) => {
+    const provider = (c.req.query('provider') || '').toLowerCase();
+    if (provider === 'claude') {
+      return c.json({ provider, models: CLAUDE_MODEL_OPTIONS, defaultModel: DEFAULT_CLAUDE_MODEL, selectable: true });
+    }
+    if (provider === 'opencode') {
+      const models = getOpenCodeModels();
+      const configuredModel = getOpenCodeDefaultModel();
+      return c.json({
+        provider,
+        models: models.length ? models : [{ id: 'opencode-default', label: 'OpenCode default' }],
+        defaultModel: configuredModel && models.some((m) => m.id === configuredModel)
+          ? configuredModel
+          : models[0]?.id ?? configuredModel ?? 'opencode-default',
+        selectable: models.length > 0,
+        note: 'OpenCode model selection uses the OpenCode config for runtime execution.',
+      });
+    }
+    if (provider === 'acp') {
+      return c.json({
+        provider,
+        models: [{ id: 'provider-default', label: 'Provider default' }],
+        defaultModel: 'provider-default',
+        selectable: false,
+      });
+    }
+    return c.json({ error: 'Invalid provider' }, 400);
+  });
+
+  app.patch('/api/agents/:id/provider', async (c) => {
+    const agentId = c.req.param('id');
+    const body = await c.req.json<{ provider?: ProviderConfig; type?: string; model?: string; command?: string; args?: string[] }>();
+    const candidate = body.provider ?? {
+      type: body.type,
+      model: body.model,
+      command: body.command,
+      args: body.args,
+    };
+    const provider = normalizeProviderConfig(candidate);
+
+    try {
+      if (agentId === 'main') {
+        setMainProviderConfig(provider);
+      } else {
+        setAgentProvider(agentId, provider);
+      }
+      return c.json({ ok: true, agent: agentId, provider });
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : 'Failed to update provider' }, 500);
     }
   });
 
@@ -2529,6 +2652,7 @@ export function buildDashboardApp(botApi?: Api<RawApi>): Hono {
       name?: string;
       description?: string;
       model?: string;
+      provider?: ProviderConfig;
       template?: string;
       botToken?: string;
     }>();
@@ -2549,6 +2673,7 @@ export function buildDashboardApp(botApi?: Api<RawApi>): Hono {
         name,
         description,
         model: body?.model?.trim() || undefined,
+        provider: body?.provider,
         template: body?.template?.trim() || undefined,
         botToken,
       });

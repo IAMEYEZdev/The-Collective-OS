@@ -2,8 +2,19 @@ import fs from 'fs';
 import path from 'path';
 import yaml from 'js-yaml';
 
-import { CLAUDECLAW_CONFIG, PROJECT_ROOT } from './config.js';
+import { CLAUDECLAW_CONFIG, PROJECT_ROOT, STORE_DIR } from './config.js';
 import { readEnvFile } from './env.js';
+import {
+  ProviderConfig,
+  readProviderFromYaml,
+  writeProviderToYaml,
+} from './provider.js';
+
+export const DEFAULT_MAIN_DESCRIPTION = 'Primary ClaudeClaw bot';
+
+function mainConfigPath(): string {
+  return path.join(STORE_DIR, 'main-config.json');
+}
 
 // Shared roster path. Written by Node on startup and any time the agent
 // roster changes (new agent, deleted agent). Read by the Python Pipecat
@@ -39,6 +50,7 @@ export interface AgentConfig {
   botTokenEnv: string;
   botToken: string;
   model?: string;
+  provider: ProviderConfig;
   mcpServers?: string[];
   /** Per-agent war-room tool allowlist. Tokens are SDK tool names
    *  ("Bash", "Write") or "mcp:<name>" entries to opt an MCP server in.
@@ -100,6 +112,7 @@ export function loadAgentConfig(agentId: string): AgentConfig {
   const description = (raw['description'] as string) ?? '';
   const botTokenEnv = raw['telegram_bot_token_env'] as string;
   const model = raw['model'] as string | undefined;
+  const provider = readProviderFromYaml(raw);
 
   if (!name || !botTokenEnv) {
     throw new Error(`Agent config ${configPath} must have 'name' and 'telegram_bot_token_env'`);
@@ -142,6 +155,7 @@ export function loadAgentConfig(agentId: string): AgentConfig {
     botTokenEnv,
     botToken,
     model,
+    provider,
     mcpServers,
     warroomTools,
     obsidian,
@@ -161,6 +175,59 @@ export function setAgentModel(agentId: string, model: string): void {
   fs.writeFileSync(configPath, yaml.dump(raw, { lineWidth: -1 }), 'utf-8');
 }
 
+/** Update the provider field in an agent's agent.yaml file. */
+export function setAgentProvider(agentId: string, provider: ProviderConfig): void {
+  const agentDir = resolveAgentDir(agentId);
+  const configPath = path.join(agentDir, 'agent.yaml');
+  if (!fs.existsSync(configPath)) throw new Error(`Agent config not found: ${configPath}`);
+
+  const raw = yaml.load(fs.readFileSync(configPath, 'utf-8')) as Record<string, unknown>;
+  writeProviderToYaml(raw, provider);
+  fs.writeFileSync(configPath, yaml.dump(raw, { lineWidth: -1 }), 'utf-8');
+}
+
+/** Update the description field in an agent's agent.yaml file. */
+export function setAgentDescription(agentId: string, description: string): void {
+  const trimmed = description.trim();
+  if (!trimmed) throw new Error('description cannot be empty');
+
+  const agentDir = resolveAgentDir(agentId);
+  const configPath = path.join(agentDir, 'agent.yaml');
+  if (!fs.existsSync(configPath)) throw new Error(`Agent config not found: ${configPath}`);
+
+  const raw = yaml.load(fs.readFileSync(configPath, 'utf-8')) as Record<string, unknown>;
+  raw['description'] = trimmed;
+  fs.writeFileSync(configPath, yaml.dump(raw, { lineWidth: -1 }), 'utf-8');
+}
+
+/** Load the description for the main bot (persisted, editable). */
+export function getMainDescription(): string {
+  const configPath = mainConfigPath();
+  try {
+    if (!fs.existsSync(configPath)) return DEFAULT_MAIN_DESCRIPTION;
+    const raw = JSON.parse(fs.readFileSync(configPath, 'utf-8')) as { description?: string };
+    const desc = (raw.description ?? '').trim();
+    return desc || DEFAULT_MAIN_DESCRIPTION;
+  } catch {
+    return DEFAULT_MAIN_DESCRIPTION;
+  }
+}
+
+/** Persist a description for the main bot. */
+export function setMainDescription(description: string): void {
+  const trimmed = description.trim();
+  if (!trimmed) throw new Error('description cannot be empty');
+
+  if (!fs.existsSync(STORE_DIR)) fs.mkdirSync(STORE_DIR, { recursive: true });
+
+  const configPath = mainConfigPath();
+  let raw: Record<string, unknown> = {};
+  if (fs.existsSync(configPath)) {
+    try { raw = JSON.parse(fs.readFileSync(configPath, 'utf-8')) as Record<string, unknown>; } catch { raw = {}; }
+  }
+  raw['description'] = trimmed;
+  fs.writeFileSync(configPath, JSON.stringify(raw, null, 2) + '\n', 'utf-8');
+}
 /** List all configured agent IDs (directories under agents/ with agent.yaml).
  *  Scans both CLAUDECLAW_CONFIG/agents/ and PROJECT_ROOT/agents/, deduplicating.
  */
@@ -204,6 +271,7 @@ export function listAllAgents(): Array<{
   name: string;
   description: string;
   model?: string;
+  provider: ProviderConfig;
 }> {
   const ids = listAgentIds();
   const result: Array<{
@@ -211,6 +279,7 @@ export function listAllAgents(): Array<{
     name: string;
     description: string;
     model?: string;
+    provider: ProviderConfig;
   }> = [];
 
   for (const id of ids) {
@@ -221,6 +290,7 @@ export function listAllAgents(): Array<{
         name: config.name,
         description: config.description,
         model: config.model,
+        provider: config.provider,
       });
     } catch {
       // Skip agents with broken config

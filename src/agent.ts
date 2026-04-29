@@ -4,11 +4,20 @@ import path from 'path';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 
 import { AGENT_MAX_TURNS, PROJECT_ROOT, agentCwd } from './config.js';
+import { runAcpAgent } from './acp-runner.js';
 import { readEnvFile } from './env.js';
 import { classifyError, AgentError } from './errors.js';
 import { logger } from './logger.js';
 import { getScrubbedSdkEnv } from './security.js';
 import { requireEnabled } from './kill-switches.js';
+import {
+  DEFAULT_CLAUDE_MODEL,
+  ProviderConfig,
+  decodeProviderSession,
+  encodeProviderSession,
+  getMainProviderConfig,
+  sessionBelongsToProvider,
+} from './provider.js';
 
 // ── MCP server loading ──────────────────────────────────────────────
 // The Agent SDK's settingSources loads CLAUDE.md and permissions from
@@ -181,6 +190,7 @@ export async function runAgent(
   abortController?: AbortController,
   onStreamText?: (accumulatedText: string) => void,
   mcpAllowlist?: string[],
+  providerConfig?: ProviderConfig,
 ): Promise<AgentResult> {
   // Centralized kill-switch enforcement. Throws KillSwitchDisabledError if
   // LLM_SPAWN_ENABLED has been flipped off — caller is expected to surface
@@ -190,6 +200,42 @@ export async function runAgent(
   // requireEnabled calls at their own SDK boundaries.
   requireEnabled('LLM_SPAWN_ENABLED');
 
+  const provider = providerConfig ?? getMainProviderConfig();
+  const providerSessionId = sessionBelongsToProvider(sessionId, provider)
+    ? decodeProviderSession(provider, sessionId)
+    : undefined;
+
+  if (provider.type === 'opencode' || provider.type === 'acp') {
+    const typingInterval = setInterval(onTyping, 4000);
+    try {
+      const result = await runAcpAgent(
+        provider,
+        message,
+        providerSessionId,
+        onProgress,
+        abortController,
+        onStreamText,
+      );
+      return {
+        ...result,
+        newSessionId: encodeProviderSession(provider, result.newSessionId),
+      };
+    } catch (err) {
+      if (abortController?.signal.aborted) {
+        return { text: null, newSessionId: encodeProviderSession(provider, providerSessionId), usage: null, aborted: true };
+      }
+      const classified = classifyError(err);
+      logger.error(
+        { category: classified.category, recovery: classified.recovery, originalMsg: (err as Error)?.message },
+        'ACP agent query failed (classified)',
+      );
+      throw classified;
+    } finally {
+      clearInterval(typingInterval);
+    }
+  }
+
+  const claudeModel = model ?? provider.model ?? DEFAULT_CLAUDE_MODEL;
   // Read secrets from .env without polluting process.env.
   // CLAUDE_CODE_OAUTH_TOKEN is optional — the subprocess finds auth via ~/.claude/
   // automatically. Only needed if you want to override which account is used.
@@ -218,7 +264,7 @@ export async function runAgent(
     const mcpServers = loadMcpServers(mcpAllowlist);
     const mcpServerNames = Object.keys(mcpServers);
     logger.info(
-      { sessionId: sessionId ?? 'new', messageLen: message.length, mcpServers: mcpServerNames },
+      { sessionId: providerSessionId ?? 'new', messageLen: message.length, mcpServers: mcpServerNames },
       'Starting agent query',
     );
 
@@ -233,7 +279,7 @@ export async function runAgent(
         cwd: agentCwd ?? PROJECT_ROOT,
 
         // Resume the previous session for this chat (persistent context)
-        resume: sessionId,
+        resume: providerSessionId,
 
         // 'project' loads CLAUDE.md from cwd; 'user' loads ~/.claude/skills/ and user settings
         settingSources: ['project', 'user'],
@@ -256,7 +302,7 @@ export async function runAgent(
         includePartialMessages: !!onStreamText,
 
         // Model override (e.g. 'claude-haiku-4-5', 'claude-sonnet-4-5')
-        ...(model ? { model } : {}),
+        ...(claudeModel ? { model: claudeModel } : {}),
 
         // Abort support — signals the SDK to kill the subprocess
         ...(abortController ? { abortController } : {}),
@@ -392,7 +438,7 @@ export async function runAgent(
     clearInterval(typingInterval);
   }
 
-  return { text: resultText, newSessionId, usage };
+  return { text: resultText, newSessionId: encodeProviderSession(provider, newSessionId), usage };
 }
 
 // ── Retry wrapper ─────────────────────────────────────────────────
@@ -421,6 +467,7 @@ export async function runAgentWithRetry(
   onRetry?: (attempt: number, error: AgentError) => void,
   fallbackModels?: string[],
   mcpAllowlist?: string[],
+  providerConfig?: ProviderConfig,
 ): Promise<AgentResult> {
   let lastError: AgentError | undefined;
 
@@ -436,6 +483,7 @@ export async function runAgentWithRetry(
         message, sessionId, onTyping, onProgress,
         currentModel, abortController, onStreamText,
         mcpAllowlist,
+        providerConfig,
       );
     } catch (err) {
       if (!(err instanceof AgentError)) throw err;
