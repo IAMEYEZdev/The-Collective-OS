@@ -7,6 +7,12 @@ import { AGENT_MAX_TURNS, PROJECT_ROOT, agentCwd } from './config.js';
 import { readEnvFile } from './env.js';
 import { classifyError, AgentError, type RetryStrategy } from './errors.js';
 import { logger } from './logger.js';
+import {
+  triggerWakeup,
+  waitWithInterrupt,
+  DEFAULT_WAKEUP_WAIT_MS,
+  MCP_RETRY_HARD_CAP,
+} from './mcp-watchdog.js';
 
 // ── MCP server loading ──────────────────────────────────────────────
 // The Agent SDK's settingSources loads CLAUDE.md and permissions from
@@ -188,8 +194,11 @@ const INTERRUPT_FLAG_PATH = path.join(
  * Check if the interrupt flag file exists and return the reason if so.
  * Returns null if no interrupt is requested.
  * Fails safe: any error reading the file returns null (no interrupt).
+ *
+ * Exported so peer modules (e.g. the MCP watchdog's interrupt-aware wait)
+ * can honor the same Layer 2 halt signal without re-implementing the read.
  */
-function checkInterruptFlag(): string | null {
+export function checkInterruptFlag(): string | null {
   try {
     if (!fs.existsSync(INTERRUPT_FLAG_PATH)) return null;
     const content = fs.readFileSync(INTERRUPT_FLAG_PATH, 'utf-8').trim();
@@ -585,6 +594,68 @@ export async function runAgentWithRetry(
         throw err;
       }
 
+      const strategy: RetryStrategy = err.recovery.retryStrategy ?? 'normal';
+
+      // ── MCP watchdog branch ────────────────────────────────────────
+      // Mid-session MCP server disconnects need their own retry path:
+      //   * tighter cap than MAX_RETRIES (default 1, hard-capped at 3)
+      //   * trigger a wake-up command so Claude Code lazy-reconnects
+      //   * wait the handshake window, polling the Layer 2 interrupt flag
+      //     so a user halt always wins over self-recovery
+      //   * reuse the same session — Claude resumes the interrupted task
+      //   * fail safely: any sub-step that can't proceed surfaces the
+      //     original error; the watchdog must never block agents
+      if (strategy === 'mcp_wakeup_and_retry') {
+        if (attempt >= MCP_RETRY_HARD_CAP) {
+          logger.warn(
+            { attempt, cap: MCP_RETRY_HARD_CAP, category: err.category },
+            'MCP watchdog: retry cap reached, surfacing original error',
+          );
+          throw err;
+        }
+
+        const serverName = err.mcpServerName;
+        if (!serverName) {
+          logger.warn(
+            { msg: err.message },
+            'MCP watchdog: server name not extractable, surfacing original error',
+          );
+          throw err;
+        }
+
+        const triggered = triggerWakeup(serverName);
+        if (!triggered) {
+          logger.warn({ serverName }, 'MCP watchdog: wake-up could not be triggered');
+          throw err;
+        }
+
+        const { interrupted } = await waitWithInterrupt(
+          DEFAULT_WAKEUP_WAIT_MS,
+          () => checkInterruptFlag() !== null || !!abortController?.signal.aborted,
+        );
+        if (interrupted) {
+          logger.warn(
+            { serverName },
+            'MCP watchdog: interrupt observed during wake-up wait, retry aborted',
+          );
+          // Ensure the abort signal is set so the catch path treats this as
+          // a user halt rather than a transient failure.
+          if (abortController && !abortController.signal.aborted) {
+            abortController.abort();
+          }
+          throw err;
+        }
+
+        logger.info(
+          { serverName, attempt: attempt + 1, cap: MCP_RETRY_HARD_CAP },
+          'MCP watchdog: retrying turn after wake-up',
+        );
+        onRetry?.(attempt + 1, err);
+        // Skip the standard backoff sleep — the wake-up wait already
+        // covered the handshake window. Same session, same message.
+        continue;
+      }
+
       // Don't retry past the limit
       if (attempt >= MAX_RETRIES) {
         throw err;
@@ -599,7 +670,6 @@ export async function runAgentWithRetry(
       }
 
       // Apply retry strategy (Fix 1 & 2)
-      const strategy: RetryStrategy = err.recovery.retryStrategy ?? 'normal';
       if (strategy === 'strip_images_and_retry') {
         const stripped = stripImagesFromMessage(currentMessage);
         if (stripped !== currentMessage) {
