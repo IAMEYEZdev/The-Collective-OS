@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { classifyError, AgentError } from './errors.js';
+import { classifyError, AgentError, extractMcpServerName } from './errors.js';
 
 describe('classifyError', () => {
   // ── Category detection ──────────────────────────────────────────────
@@ -186,5 +186,77 @@ describe('classifyError', () => {
     expect(classifyError(new Error('RATE LIMIT EXCEEDED')).category).toBe('rate_limit');
     expect(classifyError(new Error('Unauthorized')).category).toBe('auth');
     expect(classifyError(new Error('OVERLOADED')).category).toBe('overloaded');
+  });
+
+  // ── MCP disconnect classification (watchdog) ────────────────────────
+
+  it('classifies MCP server disconnected as mcp_disconnect', () => {
+    const classified = classifyError(new Error('MCP server "basic-memory" disconnected unexpectedly'));
+    expect(classified.category).toBe('mcp_disconnect');
+    expect(classified.recovery.shouldRetry).toBe(true);
+    expect(classified.recovery.retryStrategy).toBe('mcp_wakeup_and_retry');
+  });
+
+  it('classifies MCP server connection closed as mcp_disconnect', () => {
+    const classified = classifyError(new Error('MCP server "basic-memory": connection closed'));
+    expect(classified.category).toBe('mcp_disconnect');
+  });
+
+  it('classifies MCP transport closed as mcp_disconnect', () => {
+    const classified = classifyError(new Error('MCP transport closed before response'));
+    expect(classified.category).toBe('mcp_disconnect');
+  });
+
+  it('classifies "not connected to MCP server" as mcp_disconnect', () => {
+    const classified = classifyError(new Error('Tool failed: not connected to MCP server "basic-memory"'));
+    expect(classified.category).toBe('mcp_disconnect');
+  });
+
+  it('attaches the parsed server name to the AgentError', () => {
+    const classified = classifyError(new Error('MCP server "basic-memory" connection lost'));
+    expect(classified.mcpServerName).toBe('basic-memory');
+  });
+
+  it('falls back gracefully when the server name is not parseable', () => {
+    const classified = classifyError(new Error('mcp transport closed without warning'));
+    expect(classified.category).toBe('mcp_disconnect');
+    expect(classified.mcpServerName).toBeUndefined();
+    expect(classified.recovery.userMessage).toContain('reconnected');
+  });
+
+  it('uses the parsed server name in the user-facing message when available', () => {
+    const classified = classifyError(new Error('MCP server "basic-memory" disconnected'));
+    expect(classified.recovery.userMessage).toContain('"basic-memory"');
+  });
+
+  it('does not let MCP error wording fall through to network classification', () => {
+    // SDK errors of the form `MCP server "x" timed out` must classify as
+    // mcp_disconnect, not as a generic timeout.
+    const classified = classifyError(new Error('MCP server "basic-memory" timed out'));
+    expect(classified.category).toBe('mcp_disconnect');
+  });
+
+  it('leaves non-MCP errors unaffected by the new patterns', () => {
+    expect(classifyError(new Error('ENOTFOUND api.anthropic.com')).category).toBe('network');
+    expect(classifyError(new Error('rate limit exceeded')).category).toBe('rate_limit');
+  });
+
+  // ── extractMcpServerName ────────────────────────────────────────────
+
+  it('extracts a quoted server name from a typical SDK error string', () => {
+    expect(extractMcpServerName('MCP server "basic-memory": connection closed'))
+      .toBe('basic-memory');
+  });
+
+  it('handles single quotes around the server name', () => {
+    expect(extractMcpServerName("MCP server 'apify' disconnected")).toBe('apify');
+  });
+
+  it('returns undefined when no quoted server name is present', () => {
+    expect(extractMcpServerName('mcp transport closed')).toBeUndefined();
+  });
+
+  it('returns undefined for empty input', () => {
+    expect(extractMcpServerName('')).toBeUndefined();
   });
 });

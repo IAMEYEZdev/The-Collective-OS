@@ -17,9 +17,14 @@ export type ErrorCategory =
   | 'overloaded'
   | 'bad_image'
   | 'bad_payload'
+  | 'mcp_disconnect'
   | 'unknown';
 
-export type RetryStrategy = 'normal' | 'strip_images_and_retry' | 'new_session';
+export type RetryStrategy =
+  | 'normal'
+  | 'strip_images_and_retry'
+  | 'new_session'
+  | 'mcp_wakeup_and_retry';
 
 export interface ErrorRecovery {
   shouldRetry: boolean;
@@ -34,13 +39,25 @@ export class AgentError extends Error {
   category: ErrorCategory;
   recovery: ErrorRecovery;
   originalError: Error | undefined;
+  /**
+   * Name of the affected MCP server, parsed from the SDK error string.
+   * Only set when category === 'mcp_disconnect' and extraction succeeded.
+   * The watchdog uses this to look up a wake-up command in MCP_WAKEUP_REGISTRY.
+   */
+  mcpServerName: string | undefined;
 
-  constructor(category: ErrorCategory, recovery: ErrorRecovery, originalError?: Error) {
+  constructor(
+    category: ErrorCategory,
+    recovery: ErrorRecovery,
+    originalError?: Error,
+    mcpServerName?: string,
+  ) {
     super(recovery.userMessage);
     this.name = 'AgentError';
     this.category = category;
     this.recovery = recovery;
     this.originalError = originalError;
+    this.mcpServerName = mcpServerName;
   }
 }
 
@@ -139,6 +156,61 @@ const BAD_PAYLOAD_PATTERNS = [
   'invalid request body',
 ];
 
+// MCP server disconnected mid-session. Claude Code's client does NOT auto-respawn,
+// so the watchdog catches these errors, runs the server's wake-up command, and
+// retries the turn once.
+//
+// Real SDK errors interleave the server name (e.g. `MCP server "basic-memory":
+// connection closed`), so we detect with a two-stage match:
+//   1. The text mentions "mcp server" or "mcp transport" (primary signal).
+//   2. AND one of the disconnect-symptom hints below appears anywhere.
+// Single-phrase fall-back patterns cover edge cases that don't include the
+// server name (e.g. raw "MCP transport closed").
+const MCP_PRIMARY_HINTS = ['mcp server', 'mcp transport', 'connection to mcp', 'mcp client'];
+const MCP_DISCONNECT_HINTS = [
+  'disconnect',
+  'transport closed',
+  'connection closed',
+  'connection lost',
+  'terminated',
+  'timed out',
+  'crashed',
+  'exited',
+  'not connected',
+  'has gone away',
+  'pipe closed',
+];
+const MCP_SOLO_PATTERNS = [
+  'mcp transport closed',
+  'lost connection to mcp',
+  'not connected to mcp server',
+];
+
+function isMcpDisconnect(text: string): boolean {
+  const lower = text.toLowerCase();
+  if (MCP_SOLO_PATTERNS.some((p) => lower.includes(p))) return true;
+  const primaryHit = MCP_PRIMARY_HINTS.some((p) => lower.includes(p));
+  if (!primaryHit) return false;
+  return MCP_DISCONNECT_HINTS.some((h) => lower.includes(h));
+}
+
+const MCP_SERVER_NAME_REGEX = /MCP server ["']([^"']+)["']/i;
+
+/**
+ * Parse the affected MCP server name out of an SDK error message.
+ * The SDK emits errors of the form: `MCP server "basic-memory": <reason>`.
+ * Returns undefined if the pattern doesn't match — callers must handle that.
+ * Fail-safe: never throws; regex errors return undefined.
+ */
+export function extractMcpServerName(text: string): string | undefined {
+  try {
+    const m = text.match(MCP_SERVER_NAME_REGEX);
+    return m && m[1] ? m[1] : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function matchesAny(text: string, patterns: string[]): boolean {
   const lower = text.toLowerCase();
   return patterns.some((p) => lower.includes(p));
@@ -188,6 +260,29 @@ export function classifyError(err: unknown, contextTokens?: number): AgentError 
       retryAfterMs: 2000,
       userMessage: 'Claude Code subprocess exited unexpectedly. Retrying...',
     }, raw);
+  }
+
+  // MCP disconnect must be classified before NETWORK / TIMEOUT / OVERLOADED so
+  // that the underlying reason in an MCP error message (e.g. "MCP server x timed
+  // out") doesn't get mis-classified as a generic timeout.
+  if (isMcpDisconnect(text)) {
+    const serverName = extractMcpServerName(text);
+    return new AgentError(
+      'mcp_disconnect',
+      {
+        shouldRetry: true,
+        shouldNewChat: false,
+        shouldSwitchModel: false,
+        // The wakeup-and-retry strategy manages its own timing (handshake wait).
+        retryAfterMs: 0,
+        retryStrategy: 'mcp_wakeup_and_retry',
+        userMessage: serverName
+          ? `MCP server "${serverName}" reconnected. Continuing your request...`
+          : 'MCP server reconnected. Continuing your request...',
+      },
+      raw,
+      serverName,
+    );
   }
 
   if (matchesAny(text, AUTH_PATTERNS)) {

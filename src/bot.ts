@@ -600,6 +600,13 @@ async function handleMessage(ctx: Context, message: string, forceVoiceReply = fa
       abortCtrl,
       onStreamText,
       (attempt, error) => {
+        // MCP watchdog recovery: distinct copy, no generic "(retry x/2)"
+        // suffix — the AgentError userMessage is already a full notice
+        // ("MCP server <name> reconnected. Continuing your request...").
+        if (error.category === 'mcp_disconnect') {
+          void ctx.reply(error.recovery.userMessage).catch(() => {});
+          return;
+        }
         void ctx.reply(`${error.recovery.userMessage} (retry ${attempt}/${2})`).catch(() => {});
       },
       MODEL_FALLBACK_CHAIN.length > 0 ? MODEL_FALLBACK_CHAIN : undefined,
