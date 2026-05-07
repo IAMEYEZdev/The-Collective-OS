@@ -16,9 +16,9 @@
  ╚═════╝╚══════╝╚═╝  ╚═╝ ╚══╝╚══╝
 ```
 
-> Your Claude Code CLI, delivered to your phone via Telegram.
+> Your local agent CLI, delivered to your phone via Telegram.
 
-ClaudeClaw is not a chatbot wrapper. It spawns the actual `claude` CLI on your Mac, Linux, or Windows machine and pipes the result back to your Telegram chat. Everything that works in your terminal (your skills, your tools, your context) works from your phone.
+ClaudeClaw is not a chatbot wrapper. It runs a local agent provider on your Mac, Linux, or Windows machine and pipes the result back to your Telegram chat. You can use **OpenCode** for open/source-compatible model providers, or **Claude Code** for Anthropic's Claude CLI. Everything that works in your terminal (your skills, your tools, your context) works from your phone.
 
 ![ClaudeClaw at a glance](assets/claudeclaw-overview.png)
 
@@ -32,12 +32,12 @@ ClaudeClaw has two tiers of features. The **core** features work out of the box 
 
 ### Core Features (zero to hero in 5 minutes)
 
-Everything below works with just `TELEGRAM_BOT_TOKEN` and `ALLOWED_CHAT_ID`. No extra API keys.
+Everything below works with `TELEGRAM_BOT_TOKEN`, `ALLOWED_CHAT_ID`, and one authenticated agent provider. ClaudeClaw itself does not need extra feature API keys unless you enable the experimental features below.
 
 | Feature | What it does |
 |---------|-------------|
-| **Text messaging** | Full Claude Code from your phone. All tools, all skills. |
-| **Photos and documents** | Send a photo or PDF, Claude reads and analyzes it |
+| **Text messaging** | Full local agent access from your phone. All tools, all skills. |
+| **Photos and documents** | Send a photo or PDF, your agent reads and analyzes it |
 | **Session persistence** | Context carries across every message, even after restarts |
 | **Memory system** | SQLite-backed memory that learns about you over time |
 | **Scheduled tasks v2** | Cron with plain-English descriptions, visual time picker, edit/pause/resume/delete |
@@ -49,7 +49,7 @@ Everything below works with just `TELEGRAM_BOT_TOKEN` and `ALLOWED_CHAT_ID`. No 
 | **Hive Mind** | Cross-agent activity log with 2D and 3D anatomical brain views, lobe-hover stats, per-agent pie chart |
 | **Agent files editor** | Edit each agent's CLAUDE.md from the dashboard with full SQLite-backed version history |
 | **All your skills** | Every skill in `~/.claude/skills/` auto-loads |
-| **File sending** | Claude can create and send files back to you |
+| **File sending** | Your agent can create and send files back to you |
 | **Voice output (macOS)** | Uses `say` + ffmpeg locally, no API key needed |
 
 ### Experimental Features (opt-in, additional setup)
@@ -96,7 +96,9 @@ Without this, git operations will fail with a confusing error about missing iden
 
 **macOS users:** After starting ClaudeClaw for the first time, your Mac may show "Node wants to access..." permission dialogs. You need to click Allow on each one or the bot will silently hang. Keep an eye on your Mac screen during the first run.
 
-**Which Claude plan works best?** ClaudeClaw runs the `claude` CLI, so any plan works (Free, Pro, Max). However, complex multi-step tasks (building skills, debugging code, multi-agent work) perform significantly better on **Opus**: If you're on the Free or Pro plan and Claude struggles with a task, the model matters. Sonnet is fast but often can't handle the kind of agentic work ClaudeClaw enables. Max ($100 or $200) with Opus is the recommended experience.
+**Using Claude Code?** ClaudeClaw can run the `claude` CLI, so any Claude plan works (Free, Pro, Max). However, complex multi-step tasks (building skills, debugging code, multi-agent work) perform significantly better on **Opus**. If you're on the Free or Pro plan and Claude struggles with a task, the model matters. Sonnet is fast but often can't handle the kind of agentic work ClaudeClaw enables. Max ($100 or $200) with Opus is the recommended Claude Code experience.
+
+**Prefer open/source-compatible providers?** Choose OpenCode during setup. ClaudeClaw will call `opencode acp`; OpenCode then decides which model/provider to use from its own config. Install OpenCode, run `opencode auth login`, add the provider API keys there, and set the default model there. For example, GLM, Qwen, DeepSeek, local providers, or any other OpenCode-supported provider must be configured in OpenCode first. ClaudeClaw does not store those provider API keys in `.env`.
 
 **New to the terminal?** Download [Warp](https://www.warp.dev), it's a modern terminal with AI built in. If you hit any OS-level issues during setup (permissions, missing tools, PATH problems), type `/agent` in Warp and describe what went wrong. It will walk you through fixing it. This alone will save you hours of Googling.
 
@@ -176,7 +178,7 @@ or
 Check my calendar for today
 ```
 
-or just start talking. Claude Code is running on your machine, it has access to your files, the web, and every skill you've installed.
+or just start talking. Your selected provider is running on your machine, with access to your files, the web, and every skill you've installed.
 
 ---
 
@@ -231,7 +233,7 @@ npm run status
 Output looks like:
 ```
   ✓  Node v22.3.0
-  ✓  Claude CLI 1.0.12
+  ✓  Agent provider: OpenCode or Claude Code
   ✓  Bot token: @YourBotName
   ✓  Chat ID: 1234567890
   ✓  Voice STT: Groq (configured)
@@ -266,16 +268,20 @@ Then restart the bot (Ctrl+C and `npm start`, or restart the background service)
 
 ## Cloud deployment (advanced)
 
-ClaudeClaw is designed to run on a local Mac or Linux box. Most setup paths assume you've run `claude login` on the host, you have a writable filesystem for SQLite + Obsidian + skill caches, and the process restarts mean "your machine reboots". If you want to host it on Railway, Fly, Render, Hetzner, or any other VM/container platform, two things break by default.
+ClaudeClaw is designed to run on a local Mac or Linux box. Most setup paths assume you've authenticated your selected provider on the host (`opencode auth login` or `claude login`), you have a writable filesystem for SQLite + Obsidian + skill caches, and the process restarts mean "your machine reboots". If you want to host it on Railway, Fly, Render, Hetzner, or any other VM/container platform, two things break by default.
 
-### 1. Claude Code can't authenticate
+### 1. Your agent provider can't authenticate
 
-The Claude Code CLI normally reads your Max-plan OAuth credentials from `~/.claude/.credentials.json`, which is created by `claude login` on the host. A fresh container has no such file. The subprocess exits immediately and ClaudeClaw retries forever, surfacing only `Claude Code subprocess crashed. Retrying...`
+ClaudeClaw starts your selected provider as a subprocess. A fresh container has none of your local CLI auth files, so the subprocess exits immediately and ClaudeClaw retries forever.
+
+For **Claude Code**, the CLI normally reads your Max-plan OAuth credentials from `~/.claude/.credentials.json`, which is created by `claude login` on the host.
 
 Pick one of:
 
 - **Long-lived OAuth token (Max plan).** On your local machine run `claude setup-token`. It prints a token that does not expire on its own. Set it on your cloud host as `CLAUDE_CODE_OAUTH_TOKEN=<token>`. Redeploy.
 - **API key (pay per token).** Get a key from [console.anthropic.com](https://console.anthropic.com). Set `ANTHROPIC_API_KEY=<key>`. This bypasses your subscription and bills per request.
+
+For **OpenCode**, install OpenCode in the container or VM and configure its provider credentials there before starting ClaudeClaw. Run `opencode auth login`, add the API keys for the OpenCode providers you plan to use, and set the OpenCode default model. ClaudeClaw only stores `provider: opencode`; it does not copy OpenCode provider keys into `.env`.
 
 ### 2. Container storage is ephemeral
 
@@ -290,8 +296,8 @@ Mount a persistent volume at the project root (`/app` on Railway, a Fly volume o
 
 ### Other gotchas
 
-- **CPU/RAM**: the SDK subprocess is a full `node` + `claude` runtime per query. 512 MB minimum, 1 GB recommended.
-- **Outbound network**: needs to reach `api.anthropic.com`, `api.telegram.org`, and any optional services you enable (Gemini, ElevenLabs, Slack, etc.).
+- **CPU/RAM**: each query starts a provider subprocess. 512 MB minimum, 1 GB recommended.
+- **Outbound network**: needs to reach `api.telegram.org`, your selected model provider, and any optional services you enable (Gemini, ElevenLabs, Slack, etc.).
 - **launchd / systemd**: skip the background-service step in setup. Your platform manages the process.
 - **Cloudflare Tunnel**: if you want the dashboard public, the cloud platform's own URL will already be public. You don't need the tunnel.
 
@@ -312,6 +318,11 @@ See the feature table at the top of this README. Core features work with zero ex
 ## API Keys: What Each Does
 
 > **Most users only need a Telegram bot token.** Everything below the Telegram section is optional and only needed for experimental features.
+
+Model-provider credentials are handled by the provider you choose:
+
+- **OpenCode**: configure provider keys in OpenCode itself with `opencode auth login`. If you want to use GLM, Qwen, DeepSeek, local providers, or another OpenCode-supported provider, set that API key and default model in OpenCode before starting ClaudeClaw. ClaudeClaw does not store those keys in `.env`.
+- **Claude Code**: use `claude login` for subscription/OAuth auth, or set `ANTHROPIC_API_KEY` if you want pay-per-token billing.
 
 ### Telegram Bot Token (required)
 
@@ -379,11 +390,27 @@ The skill reads `GOOGLE_API_KEY` from the environment automatically.
 
 ### Anthropic API key (optional)
 
-**What it does:** Bypasses your Max subscription and uses pay-per-token billing instead.
+**What it does:** Bypasses your Max subscription and uses pay-per-token billing instead when the active provider is Claude Code.
 
 **When to use it:** Server deployments, or if you want zero ambiguity about billing. The Max plan assumes "ordinary individual usage". an always-on bot can hit limits faster than expected.
 
 **Get it:** [console.anthropic.com](https://console.anthropic.com)
+
+---
+
+### OpenCode provider keys (optional)
+
+**What it does:** Lets OpenCode call whichever model provider you choose, such as GLM, Qwen, DeepSeek, local providers, or any other provider supported by OpenCode.
+
+**Where to configure it:** OpenCode, not ClaudeClaw. Run:
+
+```bash
+opencode auth login
+opencode models
+npm run provider:setup
+```
+
+Use `opencode auth login` to add the provider API keys, `opencode models` to confirm the model IDs available to OpenCode, and `npm run provider:setup` to tell ClaudeClaw to use OpenCode. The dashboard footer shows the active provider and the OpenCode default model ClaudeClaw will use.
 
 ---
 
@@ -481,7 +508,7 @@ ClaudeClaw downloads the video to `workspace/uploads/` and tells Claude to analy
 
 ### File sending → Claude sends you files
 
-Ask Claude to create a file (PDF, spreadsheet, image, text) and send it to you. Claude creates the file on your machine, includes a `[SEND_FILE:/path]` marker in its response, and the bot sends it as a Telegram attachment. Works with any file type up to 50MB.
+Ask your agent to create a file (PDF, spreadsheet, image, text) and send it to you. It creates the file on your machine, includes a `[SEND_FILE:/path]` marker in its response, and the bot sends it as a Telegram attachment. Works with any file type up to 50MB.
 
 ```
 "Write a haiku about AI and send it to me as a text file"
@@ -1342,7 +1369,7 @@ SELECT * FROM sessions;
 
 ## Customizing your assistant (CLAUDE.md)
 
-`CLAUDE.md` is loaded into every Claude Code session. It's the personality and context file. the main thing to edit to make ClaudeClaw yours.
+`CLAUDE.md` is loaded into every ClaudeClaw session. It's the personality and context file, and setup also creates an `AGENTS.md` symlink for tools that look for that filename. Edit `CLAUDE.md` to make ClaudeClaw yours.
 
 The sections that matter most:
 
@@ -1491,7 +1518,7 @@ Browse more: [github.com/anthropics/claude-code](https://github.com/anthropics/c
 |----------|----------|-------------|
 | `TELEGRAM_BOT_TOKEN` | Yes | From [@BotFather](https://t.me/botfather) |
 | `ALLOWED_CHAT_ID` | Yes | Your chat ID. send `/chatid` to get it |
-| `ANTHROPIC_API_KEY` | No | Pay-per-token instead of Max subscription |
+| `ANTHROPIC_API_KEY` | No | Claude Code pay-per-token instead of Max subscription |
 | `GROQ_API_KEY` | No | Voice input. [console.groq.com](https://console.groq.com) |
 | `ELEVENLABS_API_KEY` | No | Voice output. [elevenlabs.io](https://elevenlabs.io) |
 | `ELEVENLABS_VOICE_ID` | No | Your ElevenLabs voice ID string |
@@ -1505,12 +1532,15 @@ Browse more: [github.com/anthropics/claude-code](https://github.com/anthropics/c
 | `DASHBOARD_URL` | No | Public URL if using Cloudflare Tunnel |
 | `CLAUDE_CODE_OAUTH_TOKEN` | No | Override which Claude account is used |
 
+OpenCode provider keys are intentionally not listed here. Add them with `opencode auth login`; ClaudeClaw reads only the active OpenCode model/provider configuration.
+
 ---
 
 ## Available scripts
 
 ```bash
 npm run setup     # Interactive setup wizard
+npm run provider:setup # Switch between OpenCode and Claude Code
 npm run status    # Health check. env, bot, DB, service
 npm run build     # Compile TypeScript → dist/
 npm start         # Run compiled bot (production)
@@ -1521,11 +1551,13 @@ npm run typecheck # Type-check without compiling
 
 ---
 
-## Is this compliant with Anthropic's Terms of Service?
+## Is the Claude Code provider compliant with Anthropic's Terms of Service?
 
-**It's a grey area, but signs point to yes for personal use.** Anthropic's Agent SDK (`@anthropic-ai/claude-agent-sdk`) is a published, official package. Boris Cherny (Anthropic) has indicated the Agent SDK can be used for personal usage with a Claude subscription. ClaudeClaw uses this SDK exclusively.
+**For Claude Code, it's a grey area, but signs point to yes for personal use.** Anthropic's Agent SDK (`@anthropic-ai/claude-agent-sdk`) is a published, official package. Boris Cherny (Anthropic) has indicated the Agent SDK can be used for personal usage with a Claude subscription. When the active provider is Claude Code, ClaudeClaw uses this SDK path.
 
-**How ClaudeClaw works:** The Agent SDK's `query()` spawns the `claude` binary as a child process. That subprocess manages its own auth from `~/.claude/`. ClaudeClaw never reads or transmits your token. It runs Claude Code and reads the output, identical to typing `claude -p "message"` in a terminal.
+**How the Claude Code provider works:** The Agent SDK's `query()` spawns the `claude` binary as a child process. That subprocess manages its own auth from `~/.claude/`. ClaudeClaw never reads or transmits your token. It runs Claude Code and reads the output, identical to typing `claude -p "message"` in a terminal.
+
+**How the OpenCode provider works:** ClaudeClaw starts `opencode acp` and talks to it over ACP. OpenCode owns provider auth, API keys, and model selection. Configure those with OpenCode before using the OpenCode provider.
 
 | | ClaudeClaw | Token-extraction tools |
 |---|---|---|
@@ -1626,9 +1658,9 @@ Or view it in the dashboard via the API: `GET /api/audit?limit=50`.
 - Git needs these set once, globally, before it can do anything
 
 **Can't access the internet / "break out"**
-- ClaudeClaw runs the real Claude Code CLI, which has full internet access through its built-in tools (web search, web fetch, bash with curl, etc.)
-- If Claude says it can't access the internet, it's likely a skill or prompt issue, not a ClaudeClaw limitation
-- Make sure your Claude Code CLI works in the terminal first: open a terminal, run `claude`, and ask it to search the web
+- ClaudeClaw runs your selected provider locally. Claude Code and OpenCode each expose their own tools and network behavior.
+- If the agent says it can't access the internet, first verify the selected provider works in a normal terminal session.
+- For Claude Code: run `claude` and ask it to search the web. For OpenCode: run `opencode`, confirm the configured model works, and make sure any provider API keys are set in OpenCode.
 
 **Voice notes return an error**
 - `GROQ_API_KEY` must be in `.env` and the bot restarted after adding it
@@ -1657,10 +1689,10 @@ Or view it in the dashboard via the API: `GET /api/audit?limit=50`.
 ## Common confusions
 
 **"Do I need the mega prompt / Rebuild_Prompt.md?"**
-No. There is no separate prompt to execute and no `Rebuild_Prompt.md` file. `CLAUDE.md` in the repo **is** the prompt, it loads automatically into every Claude Code session. You personalize it once (replace the `[BRACKETED]` placeholders with your info) and forget about it. Just clone the repo, run setup, and go. When you `git pull` updates, your personalized `.env` stays untouched (gitignored) and `CLAUDE.md` changes are merged by git.
+No. There is no separate prompt to execute and no `Rebuild_Prompt.md` file. `CLAUDE.md` is the main instruction file, and setup also creates `AGENTS.md` as a symlink for tools that expect that filename. You personalize it once (replace the `[BRACKETED]` placeholders with your info) and forget about it. Just clone the repo, run setup, and go. When you `git pull` updates, your personalized `.env` stays untouched.
 
 **"Does this use Claude Remote?"**
-No. ClaudeClaw has nothing to do with Anthropic's Remote product. It runs the `claude` CLI locally on your own machine (Mac, Linux, or Windows via WSL2) and pipes results to Telegram. No cloud VMs, no remote sessions.
+No. ClaudeClaw has nothing to do with Anthropic's Remote product. It runs your selected provider locally on your own machine (Mac, Linux, or Windows via WSL2) and pipes results to Telegram. If you choose Claude Code, that means the local `claude` CLI. If you choose OpenCode, that means local `opencode acp`. No cloud VMs, no remote sessions.
 
 **"Does this work on Windows?"**
 Yes, two ways. WSL2 is the smoothest (install WSL2, clone ClaudeClaw inside the WSL filesystem, run the normal Linux setup). Native Windows also works: the setup wizard registers a per-user Scheduled Task at logon (no admin rights), and agent activate/deactivate uses `schtasks` under the hood. War Room voice still needs WSL2 because the Python stack is POSIX-only.
