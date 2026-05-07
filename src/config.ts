@@ -81,6 +81,13 @@ export function updateAgentSystemPrompt(next: string | undefined): void {
   agentSystemPrompt = next;
 }
 
+/** Update just the active provider for the running process. Dashboard
+ * provider changes persist to disk separately; this keeps main hot-switches
+ * honest without rebuilding the full agent override object. */
+export function updateAgentProvider(next: ProviderConfig | undefined): void {
+  agentProvider = next;
+}
+
 export const TELEGRAM_BOT_TOKEN =
   process.env.TELEGRAM_BOT_TOKEN || envConfig.TELEGRAM_BOT_TOKEN || '';
 

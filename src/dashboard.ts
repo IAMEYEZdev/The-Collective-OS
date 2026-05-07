@@ -7,7 +7,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { spawnSync } from 'child_process';
-import { AGENT_ID, ALLOWED_CHAT_ID, DASHBOARD_PORT, DASHBOARD_TOKEN, DASHBOARD_URL, PROJECT_ROOT, STORE_DIR, WHATSAPP_ENABLED, SLACK_USER_TOKEN, CONTEXT_LIMIT, agentDefaultModel, CLAUDECLAW_CONFIG } from './config.js';
+import { AGENT_ID, ALLOWED_CHAT_ID, DASHBOARD_PORT, DASHBOARD_TOKEN, DASHBOARD_URL, PROJECT_ROOT, STORE_DIR, WHATSAPP_ENABLED, SLACK_USER_TOKEN, CONTEXT_LIMIT, agentDefaultModel, CLAUDECLAW_CONFIG, updateAgentProvider } from './config.js';
 import crypto from 'crypto';
 import {
   getAllScheduledTasks,
@@ -105,6 +105,7 @@ import {
 import {
   DEFAULT_CLAUDE_MODEL,
   ProviderConfig,
+  getProviderDisplay,
   getMainProviderConfig,
   normalizeProviderConfig,
   setMainProviderConfig,
@@ -165,6 +166,23 @@ function getOpenCodeDefaultModel(): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+function getProviderStatus() {
+  const provider = getMainProviderConfig();
+  const model = provider.type === 'claude'
+    ? (getMainModelOverride() ?? provider.model ?? agentDefaultModel ?? DEFAULT_CLAUDE_MODEL)
+    : provider.type === 'opencode'
+      ? (getOpenCodeDefaultModel() ?? 'OpenCode default')
+      : (provider.command ? `${provider.command}${provider.args?.length ? ` ${provider.args.join(' ')}` : ''}` : 'Provider default');
+
+  return {
+    provider,
+    providerType: provider.type,
+    label: provider.type === 'claude' ? 'Claude' : provider.type === 'opencode' ? 'OpenCode' : 'ACP',
+    runtime: getProviderDisplay(provider),
+    model,
+  };
 }
 
 async function classifyTaskAgent(prompt: string): Promise<string | null> {
@@ -1908,7 +1926,7 @@ export function buildDashboardApp(botApi?: Api<RawApi>): Hono {
       turns,
       compactions,
       sessionAge,
-      model: agentDefaultModel || 'sonnet-4-6',
+      ...getProviderStatus(),
       telegramConnected: getTelegramConnected(),
       waConnected: WHATSAPP_ENABLED,
       slackConnected: !!SLACK_USER_TOKEN,
@@ -1928,6 +1946,10 @@ export function buildDashboardApp(botApi?: Api<RawApi>): Hono {
       // generating long-term memories with no visible signal.
       memoryIngestion: getIngestionQuotaStatus(),
     });
+  });
+
+  app.get('/api/provider/status', (c) => {
+    return c.json(getProviderStatus());
   });
 
   // Token / cost stats
@@ -2146,10 +2168,11 @@ export function buildDashboardApp(botApi?: Api<RawApi>): Hono {
     try {
       if (agentId === 'main') {
         setMainProviderConfig(provider);
+        updateAgentProvider(provider);
       } else {
         setAgentProvider(agentId, provider);
       }
-      return c.json({ ok: true, agent: agentId, provider });
+      return c.json({ ok: true, agent: agentId, provider, restartRequired: agentId !== 'main' });
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : 'Failed to update provider' }, 500);
     }

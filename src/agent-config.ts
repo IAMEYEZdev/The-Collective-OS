@@ -82,20 +82,36 @@ export function resolveAgentDir(agentId: string): string {
   return path.join(PROJECT_ROOT, 'agents', agentId);
 }
 
+export function resolveInstructionMd(dir: string): string | null {
+  const claudePath = path.join(dir, 'CLAUDE.md');
+  if (fs.existsSync(claudePath)) return claudePath;
+  const agentsPath = path.join(dir, 'AGENTS.md');
+  if (fs.existsSync(agentsPath)) return agentsPath;
+  return null;
+}
+
+export function ensureAgentsMdSymlink(dir: string): boolean {
+  const claudePath = path.join(dir, 'CLAUDE.md');
+  const agentsPath = path.join(dir, 'AGENTS.md');
+  if (!fs.existsSync(claudePath) || fs.existsSync(agentsPath)) return false;
+
+  try {
+    fs.symlinkSync('CLAUDE.md', agentsPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
- * Resolve the CLAUDE.md path for a given agent, checking CLAUDECLAW_CONFIG first,
- * then falling back to PROJECT_ROOT/agents/<id>/CLAUDE.md.
+ * Resolve the instruction file path for a given agent, checking CLAUDECLAW_CONFIG
+ * first, then falling back to PROJECT_ROOT/agents/<id>. CLAUDE.md remains the
+ * canonical file for ClaudeClaw, while AGENTS.md is accepted for Codex-style
+ * instruction loaders or symlinked setups.
  */
 export function resolveAgentClaudeMd(agentId: string): string | null {
-  const externalPath = path.join(CLAUDECLAW_CONFIG, 'agents', agentId, 'CLAUDE.md');
-  if (fs.existsSync(externalPath)) {
-    return externalPath;
-  }
-  const repoPath = path.join(PROJECT_ROOT, 'agents', agentId, 'CLAUDE.md');
-  if (fs.existsSync(repoPath)) {
-    return repoPath;
-  }
-  return null;
+  return resolveInstructionMd(path.join(CLAUDECLAW_CONFIG, 'agents', agentId))
+    ?? resolveInstructionMd(path.join(PROJECT_ROOT, 'agents', agentId));
 }
 
 export function loadAgentConfig(agentId: string): AgentConfig {

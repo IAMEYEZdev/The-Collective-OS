@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 
-import { loadAgentConfig, listAgentIds, resolveAgentDir, resolveAgentClaudeMd, refreshWarRoomRoster } from './agent-config.js';
+import { loadAgentConfig, listAgentIds, resolveAgentDir, resolveAgentClaudeMd, resolveInstructionMd, refreshWarRoomRoster } from './agent-config.js';
 import { createBot } from './bot.js';
 import { checkPendingMigrations } from './migrations.js';
 import { ALLOWED_CHAT_ID, activeBotToken, STORE_DIR, PROJECT_ROOT, CLAUDECLAW_CONFIG, GOOGLE_API_KEY, setAgentOverrides, SECURITY_PIN_HASH, IDLE_LOCK_MINUTES, EMERGENCY_KILL_PHRASE, WARROOM_ENABLED, WARROOM_PORT } from './config.js';
@@ -60,8 +60,7 @@ if (AGENT_ID !== 'main') {
   // pattern as sub-agents). Falls back to CLAUDECLAW_CONFIG/CLAUDE.md for
   // backward compatibility with setups that only have a root-level file.
   const agentClaudeMd = resolveAgentClaudeMd('main');
-  const rootClaudeMd = path.join(CLAUDECLAW_CONFIG, 'CLAUDE.md');
-  const claudeMdSource = agentClaudeMd ?? (fs.existsSync(rootClaudeMd) ? rootClaudeMd : null);
+  const claudeMdSource = agentClaudeMd ?? resolveInstructionMd(CLAUDECLAW_CONFIG);
 
   if (claudeMdSource) {
     let systemPrompt: string | undefined;

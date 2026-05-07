@@ -245,6 +245,19 @@ function updateOpenCodeDefaultModel(model: string): void {
   fs.writeFileSync(configPath, JSON.stringify(raw, null, 2) + '\n', 'utf-8');
 }
 
+function ensureAgentsMdSymlink(dir: string): boolean {
+  const claudeMd = path.join(dir, 'CLAUDE.md');
+  const agentsMd = path.join(dir, 'AGENTS.md');
+  if (!fs.existsSync(claudeMd) || fs.existsSync(agentsMd)) return false;
+
+  try {
+    fs.symlinkSync('CLAUDE.md', agentsMd);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function configureProvider(): Promise<'claude' | 'opencode'> {
   section('Provider');
   info('Choose the agent backend ClaudeClaw should use for the main bot.');
@@ -715,6 +728,9 @@ async function main() {
     }
   } else {
     ok(`CLAUDE.md exists at ${claudeMdDest}`);
+  }
+  if (ensureAgentsMdSymlink(claudeclawConfigDir)) {
+    ok(`Created AGENTS.md symlink → ${path.join(claudeclawConfigDir, 'AGENTS.md')}`);
   }
 
   // ── 6b. CLAUDE.md personalization ────────────────────────────────────────
@@ -1250,6 +1266,7 @@ async function main() {
       if (fs.existsSync(templateClaudeMd) && !fs.existsSync(destClaudeMd)) {
         fs.copyFileSync(templateClaudeMd, destClaudeMd);
       }
+      ensureAgentsMdSymlink(agentDir);
 
       // Create agent.yaml from example
       const exampleYaml = path.join(PROJECT_ROOT, 'agents', templateId, 'agent.yaml.example');
