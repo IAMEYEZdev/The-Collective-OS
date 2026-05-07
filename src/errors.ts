@@ -110,6 +110,12 @@ const CONTEXT_PATTERNS = [
   'token limit',
 ];
 
+const COMMAND_NOT_FOUND_PATTERNS = [
+  'enoent',
+  'command not found',
+  'failed to start acp provider command',
+];
+
 function matchesAny(text: string, patterns: string[]): boolean {
   const lower = text.toLowerCase();
   return patterns.some((p) => lower.includes(p));
@@ -158,6 +164,16 @@ export function classifyError(err: unknown, contextTokens?: number): AgentError 
       shouldSwitchModel: false,
       retryAfterMs: 2000,
       userMessage: 'Claude Code subprocess exited unexpectedly. Retrying...',
+    }, raw);
+  }
+
+  if (matchesAny(text, COMMAND_NOT_FOUND_PATTERNS)) {
+    return new AgentError('subprocess_crash', {
+      shouldRetry: false,
+      shouldNewChat: false,
+      shouldSwitchModel: false,
+      retryAfterMs: 0,
+      userMessage: 'OpenCode could not be started. Make sure `opencode` is installed and available on PATH for the ClaudeClaw service, or switch the provider back to Claude.',
     }, raw);
   }
 

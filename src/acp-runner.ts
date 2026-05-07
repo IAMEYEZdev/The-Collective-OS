@@ -88,6 +88,15 @@ function emptyUsage(): UsageInfo {
   };
 }
 
+function isSessionNotFoundError(err: unknown): boolean {
+  const data = (err as { data?: unknown })?.data;
+  const message = err instanceof Error ? err.message : String(err);
+  const dataText = typeof data === 'string'
+    ? data
+    : data ? JSON.stringify(data) : '';
+  return /session not found/i.test(`${message}\n${dataText}`);
+}
+
 export async function runAcpAgent(
   provider: ProviderConfig,
   message: string,
@@ -102,6 +111,16 @@ export async function runAcpAgent(
     stdio: ['pipe', 'pipe', 'pipe'],
     env: process.env,
   });
+  const spawnErrorPromise = new Promise<never>((_, reject) => {
+    child.once('error', (err: NodeJS.ErrnoException) => {
+      const hint = err.code === 'ENOENT'
+        ? ` Make sure "${command}" is installed and available on PATH for the ClaudeClaw service.`
+        : '';
+      reject(new Error(`Failed to start ACP provider command "${command}": ${err.message}.${hint}`));
+    });
+  });
+
+  const withSpawnError = <T>(promise: Promise<T>): Promise<T> => Promise.race([promise, spawnErrorPromise]);
 
   let stderr = '';
   child.stderr?.on('data', (chunk: Buffer) => {
@@ -122,14 +141,14 @@ export async function runAcpAgent(
   abortController?.signal.addEventListener('abort', abortHandler, { once: true });
 
   try {
-    const init = await connection.initialize({
+    const init = await withSpawnError(connection.initialize({
       protocolVersion: acp.PROTOCOL_VERSION,
       clientCapabilities: {
         fs: { readTextFile: true, writeTextFile: true },
         terminal: false,
       },
       clientInfo: { name: 'ClaudeClaw', version: '1.1.0' },
-    });
+    }));
 
     logger.info(
       { provider: provider.type, protocolVersion: init.protocolVersion, agent: init.agentInfo?.name },
@@ -138,26 +157,54 @@ export async function runAcpAgent(
 
     let activeSessionId = sessionId;
     const capabilities = init.agentCapabilities as Record<string, unknown>;
-    if (activeSessionId && capabilities.session && typeof capabilities.session === 'object') {
-      const sessionCaps = capabilities.session as Record<string, unknown>;
-      if (sessionCaps.resume) {
-        await connection.resumeSession({ sessionId: activeSessionId, cwd: agentCwd ?? PROJECT_ROOT });
+    const sessionCaps = capabilities.session && typeof capabilities.session === 'object'
+      ? capabilities.session as Record<string, unknown>
+      : undefined;
+    const canResumeSession = sessionCaps?.resume === true;
+
+    if (activeSessionId) {
+      if (canResumeSession) {
+        try {
+          await withSpawnError(connection.resumeSession({ sessionId: activeSessionId, cwd: agentCwd ?? PROJECT_ROOT }));
+        } catch (err) {
+          if (!isSessionNotFoundError(err)) throw err;
+          logger.warn({ provider: provider.type, sessionId: activeSessionId }, 'ACP provider could not resume session; starting a new session');
+          activeSessionId = undefined;
+        }
+      } else {
+        logger.info({ provider: provider.type }, 'ACP provider does not advertise session resume; starting a new session');
+        activeSessionId = undefined;
       }
     }
 
-    if (!activeSessionId) {
-      const created = await connection.newSession({
+    const createSession = async (): Promise<string> => {
+      const created = await withSpawnError(connection.newSession({
         cwd: agentCwd ?? PROJECT_ROOT,
         mcpServers: [],
-      });
-      activeSessionId = created.sessionId;
+      }));
+      return created.sessionId;
+    };
+
+    if (!activeSessionId) {
+      activeSessionId = await createSession();
     }
 
     onProgress?.({ type: 'task_started', description: `${provider.type} session started` });
-    const promptResult = await connection.prompt({
-      sessionId: activeSessionId,
-      prompt: [{ type: 'text', text: message }],
-    });
+    let promptResult: acp.PromptResponse;
+    try {
+      promptResult = await withSpawnError(connection.prompt({
+        sessionId: activeSessionId,
+        prompt: [{ type: 'text', text: message }],
+      }));
+    } catch (err) {
+      if (!isSessionNotFoundError(err)) throw err;
+      logger.warn({ provider: provider.type, sessionId: activeSessionId }, 'ACP provider rejected stale session; starting a new session');
+      activeSessionId = await createSession();
+      promptResult = await withSpawnError(connection.prompt({
+        sessionId: activeSessionId,
+        prompt: [{ type: 'text', text: message }],
+      }));
+    }
 
     if (promptResult.stopReason === 'cancelled' || abortController?.signal.aborted) {
       return { text: client.text || null, newSessionId: activeSessionId, usage: emptyUsage(), aborted: true };

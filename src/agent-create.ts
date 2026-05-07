@@ -11,6 +11,13 @@ import { refreshAgentRegistry } from './orchestrator.js';
 import { atomicEnvWrite } from './env-write.js';
 import { logger } from './logger.js';
 import { IS_WINDOWS, IS_MACOS, IS_LINUX, killProcess, isProcessAlive, claudeCodeHandoff, findProcessesByPattern } from './platform.js';
+import {
+  DEFAULT_CLAUDE_MODEL,
+  ProviderConfig,
+  getMainProviderConfig,
+  normalizeProviderConfig,
+  writeProviderToYaml,
+} from './provider.js';
 
 // Documentation block injected into every newly-created agent's
 // CLAUDE.md if the template they were generated from doesn't already
@@ -114,6 +121,7 @@ export interface CreateAgentOpts {
   name: string;
   description: string;
   model?: string;
+  provider?: ProviderConfig;
   template?: string;
   botToken: string;
 }
@@ -226,7 +234,7 @@ export function listTemplates(): AgentTemplate[] {
 // ── Create ───────────────────────────────────────────────────────────
 
 export async function createAgent(opts: CreateAgentOpts): Promise<CreateAgentResult> {
-  const { id, name, description, model, template, botToken } = opts;
+  const { id, name, description, model, provider, template, botToken } = opts;
 
   // Validate ID
   const idCheck = validateAgentId(id);
@@ -299,8 +307,16 @@ export async function createAgent(opts: CreateAgentOpts): Promise<CreateAgentRes
     name,
     description,
     telegram_bot_token_env: envKey,
-    model: model || 'claude-sonnet-4-6',
   };
+  const providerConfig = provider
+    ? normalizeProviderConfig(provider, model)
+    : model
+      ? normalizeProviderConfig({ type: 'claude', model })
+      : getMainProviderConfig();
+  if (providerConfig.type === 'claude' && !providerConfig.model) {
+    providerConfig.model = model || DEFAULT_CLAUDE_MODEL;
+  }
+  writeProviderToYaml(agentYaml, providerConfig);
   fs.writeFileSync(
     path.join(agentDir, 'agent.yaml'),
     yaml.dump(agentYaml, { lineWidth: -1 }),

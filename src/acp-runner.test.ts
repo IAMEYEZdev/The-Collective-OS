@@ -23,7 +23,12 @@ import * as acp from ${JSON.stringify(acpUrl)};
 
 class FakeAgent {
   constructor(conn) { this.conn = conn; this.sessions = new Set(); this.pending = new Map(); }
-  async initialize() { return { protocolVersion: acp.PROTOCOL_VERSION, agentCapabilities: { loadSession: false, session: { resume: true } } }; }
+  async initialize() {
+    return {
+      protocolVersion: acp.PROTOCOL_VERSION,
+      agentCapabilities: ${mode === 'noresume' ? '{ loadSession: false }' : '{ loadSession: false, session: { resume: true } }'},
+    };
+  }
   async newSession() { const id = 'sess-' + ${JSON.stringify(mode)}; this.sessions.add(id); return { sessionId: id }; }
   async resumeSession(params) { this.sessions.add(params.sessionId); return {}; }
   async authenticate() { return {}; }
@@ -102,6 +107,18 @@ describe('runAcpAgent', () => {
     expect(result.text).toBe('hello world');
   });
 
+  it('starts a new session when the provider does not support resume', async () => {
+    const script = writeFakeAcpAgent('noresume');
+    const result = await runAcpAgent(
+      { type: 'acp', command: process.execPath, args: [script] },
+      'hi',
+      'existing-session',
+    );
+
+    expect(result.newSessionId).toBe('sess-noresume');
+    expect(result.text).toBe('hello world');
+  });
+
   it('launches OpenCode through the opencode acp preset', async () => {
     const { oldPath } = writeFakeOpenCode('ok');
     try {
@@ -120,6 +137,14 @@ describe('runAcpAgent', () => {
       'hi',
       undefined,
     )).rejects.toThrow(/fake acp failure/);
+  });
+
+  it('rejects cleanly when the ACP command is missing', async () => {
+    await expect(runAcpAgent(
+      { type: 'acp', command: 'claudeclaw-missing-acp-command' },
+      'hi',
+      undefined,
+    )).rejects.toThrow(/Failed to start ACP provider command/);
   });
 
   it('returns aborted when cancelled', async () => {
