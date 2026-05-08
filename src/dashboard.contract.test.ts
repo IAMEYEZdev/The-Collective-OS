@@ -13,22 +13,39 @@
 // Env vars are set by `src/test-env-setup.ts` (vitest setupFiles) so they
 // land BEFORE config.ts evaluates at import time.
 
-import { describe, it, expect, beforeAll, beforeEach } from 'vitest';
+import fs from 'fs';
+import path from 'path';
+import { describe, it, expect, beforeAll, beforeEach, afterEach } from 'vitest';
 import { _initTestDatabase } from './db.js';
 import { buildDashboardApp } from './dashboard.js';
+import { STORE_DIR } from './config.js';
 import type { Hono } from 'hono';
 
 const TOKEN = 'test-contract-token';
 const Q = '?token=' + TOKEN;
 
 let app: Hono;
+const mainConfigPath = path.join(STORE_DIR, 'main-config.json');
+let originalMainConfig: string | null = null;
 
 beforeAll(() => {
+  originalMainConfig = fs.existsSync(mainConfigPath)
+    ? fs.readFileSync(mainConfigPath, 'utf-8')
+    : null;
   app = buildDashboardApp(undefined) as unknown as Hono;
 });
 
 beforeEach(() => {
   _initTestDatabase();
+});
+
+afterEach(() => {
+  if (originalMainConfig === null) {
+    try { fs.unlinkSync(mainConfigPath); } catch { /* absent */ }
+  } else {
+    fs.mkdirSync(path.dirname(mainConfigPath), { recursive: true });
+    fs.writeFileSync(mainConfigPath, originalMainConfig, 'utf-8');
+  }
 });
 
 async function get(path: string) {
