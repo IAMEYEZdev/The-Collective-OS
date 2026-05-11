@@ -345,6 +345,7 @@ function Bubble({ turn }: { turn: Turn }) {
       <div
         class={[
           'max-w-[75%] rounded-lg text-[12.5px] leading-relaxed overflow-hidden',
+          'select-text',
           isPhoto ? 'p-1' : 'px-3 py-2',
           isUser
             ? 'bg-[var(--color-accent)] text-white rounded-br-sm whitespace-pre-wrap'
