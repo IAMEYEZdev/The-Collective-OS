@@ -4,13 +4,13 @@ import yaml from 'js-yaml';
 
 import { STORE_DIR } from './config.js';
 
-export type ProviderType = 'claude' | 'acp' | 'opencode';
+export type ProviderType = 'claude' | 'acp' | 'opencode' | 'gemini' | 'codex';
 
 export interface ProviderConfig {
   type: ProviderType;
   /** Claude-only model override. ACP/OpenCode model defaults live in the provider. */
   model?: string;
-  /** Generic ACP command. OpenCode uses command=opencode args=['acp']. */
+  /** Generic ACP command. Built-in ACP presets supply their own commands. */
   command?: string;
   args?: string[];
 }
@@ -22,7 +22,7 @@ export function normalizeProviderConfig(input: unknown, legacyModel?: string): P
   const raw = input && typeof input === 'object' ? input as Record<string, unknown> : {};
   const typeRaw = typeof raw.type === 'string' ? raw.type.toLowerCase() : undefined;
 
-  if (typeRaw === 'claude' || typeRaw === 'acp' || typeRaw === 'opencode') {
+  if (typeRaw === 'claude' || typeRaw === 'acp' || typeRaw === 'opencode' || typeRaw === 'gemini' || typeRaw === 'codex') {
     const cfg: ProviderConfig = { type: typeRaw };
     if (typeof raw.model === 'string' && raw.model.trim()) cfg.model = raw.model.trim();
     if (typeof raw.command === 'string' && raw.command.trim()) cfg.command = raw.command.trim();
@@ -81,6 +81,8 @@ export function setMainProviderConfig(provider: ProviderConfig): void {
 export function getProviderDisplay(provider: ProviderConfig): string {
   if (provider.type === 'claude') return `Claude${provider.model ? ` (${provider.model})` : ''}`;
   if (provider.type === 'opencode') return 'OpenCode (model from OpenCode config)';
+  if (provider.type === 'gemini') return 'Gemini CLI (ACP)';
+  if (provider.type === 'codex') return 'Codex (codex-acp adapter)';
   return `ACP (${provider.command ?? 'custom command'}${provider.args?.length ? ` ${provider.args.join(' ')}` : ''})`;
 }
 

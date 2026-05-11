@@ -57,13 +57,22 @@ new acp.AgentSideConnection((conn) => new FakeAgent(conn), stream);
 }
 
 function writeFakeOpenCode(mode: string): { oldPath: string } {
+  return writeFakePresetCommand('opencode', ['acp'], mode);
+}
+
+function writeFakePresetCommand(command: string, expectedArgs: string[], mode: string): { oldPath: string } {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'claudeclaw-opencode-test-'));
   tmpDirs.push(dir);
   const agentScript = writeFakeAcpAgent(mode);
-  const bin = path.join(dir, 'opencode');
+  const bin = path.join(dir, command);
+  const argAssertions = expectedArgs
+    .map((arg, idx) => `test "$${idx + 1}" = ${JSON.stringify(arg)} || exit 42`)
+    .join('\n');
+  const arityAssertion = `test "$#" = "${expectedArgs.length}" || exit 42`;
   fs.writeFileSync(bin, [
     '#!/usr/bin/env sh',
-    'test "$1" = "acp" || exit 42',
+    arityAssertion,
+    argAssertions,
     `exec "${process.execPath}" "${agentScript}"`,
     '',
   ].join('\n'), 'utf-8');
@@ -123,6 +132,28 @@ describe('runAcpAgent', () => {
     const { oldPath } = writeFakeOpenCode('ok');
     try {
       const result = await runAcpAgent({ type: 'opencode' }, 'hi', undefined);
+      expect(result.newSessionId).toBe('sess-ok');
+      expect(result.text).toBe('hello world');
+    } finally {
+      process.env.PATH = oldPath;
+    }
+  });
+
+  it('launches Gemini through the gemini --acp preset', async () => {
+    const { oldPath } = writeFakePresetCommand('gemini', ['--acp'], 'ok');
+    try {
+      const result = await runAcpAgent({ type: 'gemini' }, 'hi', undefined);
+      expect(result.newSessionId).toBe('sess-ok');
+      expect(result.text).toBe('hello world');
+    } finally {
+      process.env.PATH = oldPath;
+    }
+  });
+
+  it('launches Codex through the codex-acp adapter preset', async () => {
+    const { oldPath } = writeFakePresetCommand('codex-acp', [], 'ok');
+    try {
+      const result = await runAcpAgent({ type: 'codex' }, 'hi', undefined);
       expect(result.newSessionId).toBe('sess-ok');
       expect(result.text).toBe('hello world');
     } finally {

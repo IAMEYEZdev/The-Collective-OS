@@ -174,15 +174,34 @@ function getProviderStatus() {
     ? (getMainModelOverride() ?? provider.model ?? agentDefaultModel ?? DEFAULT_CLAUDE_MODEL)
     : provider.type === 'opencode'
       ? (getOpenCodeDefaultModel() ?? 'OpenCode default')
+      : provider.type === 'gemini'
+        ? 'Gemini CLI default'
+        : provider.type === 'codex'
+          ? 'Codex adapter default'
       : (provider.command ? `${provider.command}${provider.args?.length ? ` ${provider.args.join(' ')}` : ''}` : 'Provider default');
 
   return {
     provider,
     providerType: provider.type,
-    label: provider.type === 'claude' ? 'Claude' : provider.type === 'opencode' ? 'OpenCode' : 'ACP',
+    label: provider.type === 'claude'
+      ? 'Claude'
+      : provider.type === 'opencode'
+        ? 'OpenCode'
+        : provider.type === 'gemini'
+          ? 'Gemini'
+          : provider.type === 'codex'
+            ? 'Codex'
+            : 'ACP',
     runtime: getProviderDisplay(provider),
     model,
   };
+}
+
+function validateProviderConfig(provider: ProviderConfig): string | null {
+  if (provider.type === 'acp' && !provider.command?.trim()) {
+    return 'Custom ACP provider requires a command';
+  }
+  return null;
 }
 
 async function classifyTaskAgent(prompt: string): Promise<string | null> {
@@ -2143,6 +2162,24 @@ export function buildDashboardApp(botApi?: Api<RawApi>): Hono {
         note: 'OpenCode model selection uses the OpenCode config for runtime execution.',
       });
     }
+    if (provider === 'gemini') {
+      return c.json({
+        provider,
+        models: [{ id: 'gemini-default', label: 'Gemini CLI default' }],
+        defaultModel: 'gemini-default',
+        selectable: false,
+        note: 'Gemini model selection is managed by Gemini CLI.',
+      });
+    }
+    if (provider === 'codex') {
+      return c.json({
+        provider,
+        models: [{ id: 'codex-default', label: 'Codex adapter default' }],
+        defaultModel: 'codex-default',
+        selectable: false,
+        note: 'Codex ACP support uses the codex-acp adapter. Install and authenticate Codex separately.',
+      });
+    }
     if (provider === 'acp') {
       return c.json({
         provider,
@@ -2164,6 +2201,8 @@ export function buildDashboardApp(botApi?: Api<RawApi>): Hono {
       args: body.args,
     };
     const provider = normalizeProviderConfig(candidate);
+    const validationError = validateProviderConfig(provider);
+    if (validationError) return c.json({ error: validationError }, 400);
 
     try {
       if (agentId === 'main') {

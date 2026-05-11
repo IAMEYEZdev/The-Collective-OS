@@ -468,6 +468,51 @@ describe('PATCH /api/agents/:id/model', () => {
   });
 });
 
+describe('provider selection endpoints', () => {
+  it('reports Gemini and Codex as non-selectable model providers', async () => {
+    const geminiRes = await get('/api/providers/models?provider=gemini');
+    expect(geminiRes.status).toBe(200);
+    expect(await jsonOf(geminiRes)).toMatchObject({
+      provider: 'gemini',
+      defaultModel: 'gemini-default',
+      selectable: false,
+    });
+
+    const codexRes = await get('/api/providers/models?provider=codex');
+    expect(codexRes.status).toBe(200);
+    expect(await jsonOf(codexRes)).toMatchObject({
+      provider: 'codex',
+      defaultModel: 'codex-default',
+      selectable: false,
+    });
+  });
+
+  it('updates main to a built-in ACP provider without restart', async () => {
+    const res = await app.request('/api/agents/main/provider' + Q, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ provider: { type: 'gemini' } }),
+    });
+    expect(res.status).toBe(200);
+    expect(await jsonOf(res)).toMatchObject({
+      ok: true,
+      agent: 'main',
+      provider: { type: 'gemini' },
+      restartRequired: false,
+    });
+  });
+
+  it('rejects custom ACP without a command', async () => {
+    const res = await app.request('/api/agents/main/provider' + Q, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ provider: { type: 'acp' } }),
+    });
+    expect(res.status).toBe(400);
+    expect(await jsonOf(res)).toMatchObject({ error: expect.stringMatching(/command/i) });
+  });
+});
+
 describe('avatar endpoints share error shape and status semantics', () => {
   // Twelve-byte canonical PNG header — the avatar PUT handler magic-byte
   // sniffs the first four bytes, so this is enough.

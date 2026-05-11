@@ -6,9 +6,9 @@ import readline from 'readline';
 import { spawnSync } from 'child_process';
 
 import {
-  ProviderConfig,
   setMainProviderConfig,
   providerToYaml,
+  type ProviderConfig,
 } from '../src/provider.js';
 import { listAgentIds, resolveAgentDir } from '../src/agent-config.js';
 import yaml from 'js-yaml';
@@ -114,14 +114,30 @@ async function selectProvider(): Promise<ProviderConfig> {
   console.log('Providers:');
   console.log('  1. Claude (default)');
   console.log('  2. OpenCode');
+  console.log('  3. Gemini CLI');
+  console.log('  4. Codex ACP adapter');
+  console.log('  5. Custom ACP command');
   console.log();
 
   const answer = (await ask('Select provider', '1')).toLowerCase();
   if (answer === '2' || answer === 'opencode' || answer === 'o') return { type: 'opencode' };
+  if (answer === '3' || answer === 'gemini' || answer === 'g') return { type: 'gemini' };
+  if (answer === '4' || answer === 'codex') return { type: 'codex' };
+  if (answer === '5' || answer === 'acp' || answer === 'custom') {
+    const command = await ask('ACP command');
+    if (!command) throw new Error('Custom ACP provider requires a command.');
+    const args = splitArgs(await ask('ACP arguments', '--acp'));
+    return { type: 'acp', command, args };
+  }
   if (answer !== '1' && answer !== 'claude' && answer !== 'c') {
     console.warn(`Unknown provider "${answer}". Using Claude.`);
   }
   return { type: 'claude', model: await ask('Claude model', 'claude-opus-4-6') };
+}
+
+function splitArgs(input: string): string[] {
+  const matches = input.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) ?? [];
+  return matches.map((part) => part.replace(/^["']|["']$/g, ''));
 }
 
 async function main(): Promise<void> {
@@ -152,6 +168,21 @@ async function main(): Promise<void> {
       }
     } else {
       console.log('Keeping OpenCode current default model.');
+    }
+  } else if (provider.type === 'gemini') {
+    if (!commandExists('gemini')) {
+      throw new Error('Gemini CLI not found. Install and authenticate Gemini CLI, then re-run npm run provider:setup.');
+    }
+    console.log('Gemini CLI found. Auth and model selection stay in Gemini CLI.');
+  } else if (provider.type === 'codex') {
+    if (!commandExists('codex-acp')) {
+      throw new Error('codex-acp adapter not found. Install and authenticate the Codex ACP adapter, then re-run npm run provider:setup.');
+    }
+    console.log('codex-acp adapter found. Auth and model selection stay in the adapter/Codex config.');
+  } else if (provider.type === 'acp') {
+    if (!provider.command) throw new Error('Custom ACP provider requires a command.');
+    if (!commandExists(provider.command)) {
+      console.warn(`Command "${provider.command}" was not found on PATH right now.`);
     }
   }
 

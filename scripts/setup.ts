@@ -6,7 +6,7 @@ import os from 'os';
 import path from 'path';
 import readline from 'readline';
 import { fileURLToPath } from 'url';
-import { setMainProviderConfig } from '../src/provider.js';
+import { setMainProviderConfig, type ProviderConfig, type ProviderType } from '../src/provider.js';
 
 // ── ANSI helpers ────────────────────────────────────────────────────────────
 const c = {
@@ -258,22 +258,33 @@ function ensureAgentsMdSymlink(dir: string): boolean {
   }
 }
 
-async function configureProvider(): Promise<'claude' | 'opencode'> {
+type SetupProviderType = Extract<ProviderType, 'claude' | 'opencode' | 'gemini' | 'codex' | 'acp'>;
+
+async function configureProvider(): Promise<SetupProviderType> {
   section('Provider');
   info('Choose the agent backend ClaudeClaw should use for the main bot.');
-  info('OpenCode uses its own auth and default model config; Claude uses Claude Code auth.');
+  info('ACP providers use their own auth and model config; Claude uses Claude Code auth.');
   console.log();
 
   bullet('1. Claude (default)');
   bullet('2. OpenCode');
+  bullet('3. Gemini CLI');
+  bullet('4. Codex ACP adapter');
+  bullet('5. Custom ACP command');
   console.log();
 
   const answer = (await ask('Select provider', '1')).toLowerCase();
-  let choice: 'claude' | 'opencode';
+  let choice: SetupProviderType;
   if (answer === '1' || answer === 'claude' || answer === 'c') {
     choice = 'claude';
   } else if (answer === '2' || answer === 'opencode' || answer === 'o') {
     choice = 'opencode';
+  } else if (answer === '3' || answer === 'gemini' || answer === 'g') {
+    choice = 'gemini';
+  } else if (answer === '4' || answer === 'codex') {
+    choice = 'codex';
+  } else if (answer === '5' || answer === 'acp' || answer === 'custom') {
+    choice = 'acp';
   } else {
     warn(`Unknown provider "${answer}". Using Claude.`);
     choice = 'claude';
@@ -283,6 +294,46 @@ async function configureProvider(): Promise<'claude' | 'opencode'> {
     setMainProviderConfig({ type: 'claude', model: 'claude-opus-4-6' });
     ok('Provider set to Claude');
     return 'claude';
+  }
+
+  if (choice === 'gemini') {
+    if (!commandExists('gemini')) {
+      fail('Gemini CLI not found');
+      info('Install and authenticate Gemini CLI first, then re-run setup.');
+      process.exit(1);
+    }
+    ok('Gemini CLI found');
+    info('Gemini auth and model selection are managed by the Gemini CLI.');
+    setMainProviderConfig({ type: 'gemini' });
+    ok('Provider set to Gemini CLI');
+    return 'gemini';
+  }
+
+  if (choice === 'codex') {
+    if (!commandExists('codex-acp')) {
+      fail('codex-acp adapter not found');
+      info('Install and authenticate the Codex ACP adapter first, then re-run setup.');
+      process.exit(1);
+    }
+    ok('codex-acp adapter found');
+    info('Codex auth and model selection are managed by the adapter/Codex config.');
+    setMainProviderConfig({ type: 'codex' });
+    ok('Provider set to Codex ACP adapter');
+    return 'codex';
+  }
+
+  if (choice === 'acp') {
+    const command = await ask('ACP command');
+    if (!command) {
+      fail('Custom ACP provider requires a command');
+      process.exit(1);
+    }
+    const argsRaw = await ask('ACP arguments', '--acp');
+    const provider: ProviderConfig = { type: 'acp', command, args: splitArgs(argsRaw) };
+    if (!commandExists(command)) warn(`Command "${command}" was not found on PATH right now.`);
+    setMainProviderConfig(provider);
+    ok('Provider set to custom ACP');
+    return 'acp';
   }
 
   if (!commandExists('opencode')) {
@@ -321,6 +372,11 @@ async function configureProvider(): Promise<'claude' | 'opencode'> {
   return 'opencode';
 }
 
+function splitArgs(input: string): string[] {
+  const matches = input.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) ?? [];
+  return matches.map((part) => part.replace(/^["']|["']$/g, ''));
+}
+
 const PLATFORM = process.platform;
 
 function isWSL(): boolean {
@@ -347,7 +403,7 @@ async function main() {
 
   console.log(`  ClaudeClaw bridges a local agent provider to Telegram.`);
   console.log(`  You message your bot from your phone. ClaudeClaw runs`);
-  console.log(`  ${c.bold}OpenCode${c.reset} or ${c.bold}Claude Code${c.reset} on your computer — with your skills,`);
+  console.log(`  ${c.bold}OpenCode${c.reset}, ${c.bold}Gemini CLI${c.reset}, another ${c.bold}ACP provider${c.reset}, or ${c.bold}Claude Code${c.reset} on your computer — with your skills,`);
   console.log(`  tools, and context — and sends the result back to you.`);
   console.log();
   console.log(`  ${c.bold}It is not a chatbot wrapper.${c.reset} It runs a real local provider.`);
@@ -364,8 +420,8 @@ async function main() {
   console.log(`  ${c.bold}FAQ${c.reset}`);
   console.log();
   console.log(`  ${c.cyan}Q:${c.reset} Does this cost anything?`);
-  info('ClaudeClaw itself is free. You need either OpenCode configured with');
-  info('your provider API keys, or Claude Code auth via claude login / ANTHROPIC_API_KEY.');
+  info('ClaudeClaw itself is free. Configure your selected provider on this machine:');
+  info('OpenCode/Gemini/custom ACP with their own provider keys, or Claude Code auth via claude login / ANTHROPIC_API_KEY.');
   info('Optional features (voice, video) have their own free tiers.');
   console.log();
   console.log(`  ${c.cyan}Q:${c.reset} Does my computer need to stay on?`);
@@ -379,8 +435,8 @@ async function main() {
   info('shut everything down instantly from your phone.');
   console.log();
   console.log(`  ${c.cyan}Q:${c.reset} Can I run this on a server / VPS?`);
-  info('Yes. Configure the selected provider on the server first. For OpenCode,');
-  info('run opencode auth login there. For Claude Code, use claude login or ANTHROPIC_API_KEY.');
+  info('Yes. Configure the selected provider on the server first. For ACP providers,');
+  info('install/authenticate the command there. For Claude Code, use claude login or ANTHROPIC_API_KEY.');
   console.log();
 
   const understood = await confirm('Ready to continue?');

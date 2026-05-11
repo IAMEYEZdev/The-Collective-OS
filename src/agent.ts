@@ -205,7 +205,7 @@ export async function runAgent(
     ? decodeProviderSession(provider, sessionId)
     : undefined;
 
-  if (provider.type === 'opencode' || provider.type === 'acp') {
+  if (provider.type === 'opencode' || provider.type === 'acp' || provider.type === 'gemini' || provider.type === 'codex') {
     const typingInterval = setInterval(onTyping, 4000);
     try {
       const result = await runAcpAgent(

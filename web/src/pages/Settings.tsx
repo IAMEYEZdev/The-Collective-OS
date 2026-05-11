@@ -3,8 +3,8 @@ import { Check, Pipette, RotateCcw } from 'lucide-preact';
 import { PageHeader } from '@/components/PageHeader';
 import { PageState } from '@/components/PageState';
 import { Toggle } from '@/components/Toggle';
-import { useFetch } from '@/lib/useFetch';
-import { apiPost } from '@/lib/api';
+import { useFetch, type FetchState } from '@/lib/useFetch';
+import { apiPatch, apiPost } from '@/lib/api';
 import { pushToast } from '@/lib/toasts';
 import {
   theme, themeMeta, setTheme, type ThemeName,
@@ -25,6 +25,9 @@ interface Health {
   killSwitchRefusals: Record<string, number>;
   model: string;
   contextPct: number;
+  provider?: { type: string; command?: string; args?: string[]; model?: string };
+  providerType?: string;
+  runtime?: string;
 }
 
 interface SecurityStatus { [key: string]: any; }
@@ -120,6 +123,15 @@ export function Settings() {
               <Row label="Search shortcut" hint="Auto matches your platform — pick a value to override.">
                 <HotkeyPicker />
               </Row>
+            </Card>
+          </Section>
+
+          <Section
+            title="Agent provider"
+            subtitle="Choose a built-in provider or point ClaudeClaw at any ACP-compatible agent command."
+          >
+            <Card>
+              <ProviderConfigPanel health={health} />
             </Card>
           </Section>
 
@@ -352,6 +364,114 @@ function HotkeyPicker() {
       })}
     </div>
   );
+}
+
+// ── Agent provider config ────────────────────────────────────────────
+
+function ProviderConfigPanel({ health }: { health: FetchState<Health> }) {
+  const current = health.data?.provider;
+  const [type, setType] = useState(current?.type ?? 'opencode');
+  const [command, setCommand] = useState(current?.command ?? '');
+  const [args, setArgs] = useState((current?.args ?? []).join(' '));
+  const [busy, setBusy] = useState(false);
+
+  function providerPayload() {
+    if (type === 'claude') return { type: 'claude', model: current?.model || 'claude-opus-4-6' };
+    if (type === 'acp') {
+      return {
+        type: 'acp',
+        command: command.trim(),
+        args: splitArgs(args),
+      };
+    }
+    return { type };
+  }
+
+  async function save() {
+    const provider = providerPayload();
+    if (provider.type === 'acp' && !(provider as any).command) {
+      pushToast({ tone: 'error', title: 'Command required', description: 'Custom ACP needs a command, for example: my-agent --acp' });
+      return;
+    }
+    setBusy(true);
+    try {
+      await apiPatch('/api/agents/main/provider', { provider });
+      health.refresh();
+      pushToast({ tone: 'success', title: 'Provider saved', description: 'Takes effect on the next message.' });
+    } catch (err: any) {
+      pushToast({ tone: 'error', title: 'Provider save failed', description: err?.message || String(err), durationMs: 7000 });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div class="space-y-3">
+      <Row label="Current" hint="Shown in the sidebar footer too.">
+        <div class="text-right">
+          <div class="font-mono text-[12px] text-[var(--color-text)]">{health.data?.providerType || 'opencode'}</div>
+          <div class="text-[11px] text-[var(--color-text-faint)] max-w-[260px] truncate">{health.data?.runtime || 'OpenCode'}</div>
+        </div>
+      </Row>
+      <Divider />
+      <Row label="Provider" hint="Gemini uses gemini --acp. Codex uses the codex-acp adapter.">
+        <select
+          value={type}
+          onChange={(event) => setType((event.currentTarget as HTMLSelectElement).value)}
+          class="h-8 w-[180px] rounded-md border border-[var(--color-border)] bg-[var(--color-elevated)] px-2 text-[12.5px] text-[var(--color-text)]"
+        >
+          <option value="opencode">OpenCode</option>
+          <option value="gemini">Gemini CLI</option>
+          <option value="codex">Codex ACP</option>
+          <option value="claude">Claude Code</option>
+          <option value="acp">Custom ACP</option>
+        </select>
+      </Row>
+      {type === 'acp' && (
+        <>
+          <Divider />
+          <Row label="Command" hint="Executable available on PATH for the service.">
+            <input
+              type="text"
+              value={command}
+              onInput={(event) => setCommand((event.currentTarget as HTMLInputElement).value)}
+              placeholder="my-acp-agent"
+              class="bg-[var(--color-elevated)] border border-[var(--color-border)] rounded px-2.5 py-1.5 text-[12.5px] font-mono text-[var(--color-text)] outline-none focus:border-[var(--color-accent)] w-[220px]"
+            />
+          </Row>
+          <Divider />
+          <Row label="Arguments" hint="Shell-style quoting is supported for simple args.">
+            <input
+              type="text"
+              value={args}
+              onInput={(event) => setArgs((event.currentTarget as HTMLInputElement).value)}
+              placeholder="--acp"
+              class="bg-[var(--color-elevated)] border border-[var(--color-border)] rounded px-2.5 py-1.5 text-[12.5px] font-mono text-[var(--color-text)] outline-none focus:border-[var(--color-accent)] w-[220px]"
+            />
+          </Row>
+        </>
+      )}
+      <div class="text-[11px] text-[var(--color-text-faint)] leading-snug pt-2 border-t border-[var(--color-border)]">
+        ClaudeClaw stores only the provider command. Configure provider auth in the provider itself:
+        OpenCode with <code class="font-mono">opencode auth login</code>, Gemini with <code class="font-mono">gemini</code>, and Codex with the <code class="font-mono">codex-acp</code> adapter.
+      </div>
+      <div class="flex justify-end pt-1">
+        <button
+          type="button"
+          onClick={save}
+          disabled={busy}
+          class="px-3 py-1.5 rounded-md text-[12px] font-medium bg-[var(--color-accent)] text-white hover:bg-[var(--color-accent-hover)] disabled:opacity-60"
+        >
+          {busy ? 'Saving...' : 'Save provider'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function splitArgs(input: string): string[] {
+  const matches = input.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) ?? [];
+  return matches.map((part) => part.replace(/^["']|["']$/g, ''));
 }
 
 // ── Kill switch row ──────────────────────────────────────────────────

@@ -169,6 +169,25 @@ describe('provider config', () => {
     expect(config.model).toBeUndefined();
   });
 
+  it('loads built-in ACP provider presets', async () => {
+    writeAgentYaml('gemini-agent', {
+      name: 'Gemini Agent',
+      description: 'gemini',
+      telegram_bot_token_env: 'TEST_BOT_TOKEN',
+      provider: { type: 'gemini' },
+    });
+    writeAgentYaml('codex-agent', {
+      name: 'Codex Agent',
+      description: 'codex',
+      telegram_bot_token_env: 'TEST_BOT_TOKEN',
+      provider: { type: 'codex' },
+    });
+
+    const { loadAgentConfig } = await import('./agent-config.js');
+    expect(loadAgentConfig('gemini-agent').provider).toEqual({ type: 'gemini' });
+    expect(loadAgentConfig('codex-agent').provider).toEqual({ type: 'codex' });
+  });
+
   it('persists provider and removes legacy model', async () => {
     const yamlPath = writeAgentYaml('switcher', {
       name: 'Switcher',
@@ -198,5 +217,19 @@ describe('provider config', () => {
     expect(sessionBelongsToProvider(claudeSession, { type: 'opencode' })).toBe(false);
     expect(decodeProviderSession({ type: 'opencode' }, claudeSession)).toBeUndefined();
     expect(decodeProviderSession({ type: 'claude' }, claudeSession)).toBe('abc');
+  });
+
+  it('namespaces built-in ACP provider sessions separately', async () => {
+    const {
+      encodeProviderSession,
+      decodeProviderSession,
+      sessionBelongsToProvider,
+    } = await import('./provider.js');
+
+    const geminiSession = encodeProviderSession({ type: 'gemini' }, 'abc');
+    expect(geminiSession).toBe('gemini:abc');
+    expect(sessionBelongsToProvider(geminiSession, { type: 'codex' })).toBe(false);
+    expect(decodeProviderSession({ type: 'codex' }, geminiSession)).toBeUndefined();
+    expect(decodeProviderSession({ type: 'gemini' }, geminiSession)).toBe('abc');
   });
 });

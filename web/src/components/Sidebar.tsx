@@ -120,7 +120,7 @@ interface Health {
 }
 
 interface ProviderStatus {
-  providerType: 'claude' | 'opencode' | 'acp';
+  providerType: 'claude' | 'opencode' | 'gemini' | 'codex' | 'acp';
   label: string;
   model: string;
   runtime: string;
@@ -142,14 +142,14 @@ function SidebarFooter() {
     try {
       const nextProvider = nextType === 'claude'
         ? { type: 'claude', model: 'claude-opus-4-6' }
-        : { type: 'opencode' };
+        : { type: nextType };
       await apiPatch('/api/agents/main/provider', { provider: nextProvider });
       provider.refresh();
       health.refresh();
       pushToast({
         tone: 'success',
-        title: nextType === 'claude' ? 'Provider set to Claude' : 'Provider set to OpenCode',
-        description: nextType === 'opencode' ? 'OpenCode will use its configured default model.' : 'Takes effect on the next message.',
+        title: 'Provider set to ' + providerLabel(nextType),
+        description: providerDescription(nextType),
       });
     } catch (err: any) {
       pushToast({ tone: 'error', title: 'Provider change failed', description: err?.message || String(err), durationMs: 7000 });
@@ -174,6 +174,8 @@ function SidebarFooter() {
             aria-label="Switch main provider"
           >
             <option value="opencode">OpenCode</option>
+            <option value="gemini">Gemini</option>
+            <option value="codex">Codex</option>
             <option value="claude">Claude</option>
           </select>
         </div>
@@ -211,4 +213,19 @@ function SidebarFooter() {
       </Link>
     </div>
   );
+}
+
+function providerLabel(type: string): string {
+  if (type === 'claude') return 'Claude';
+  if (type === 'gemini') return 'Gemini';
+  if (type === 'codex') return 'Codex';
+  if (type === 'acp') return 'Custom ACP';
+  return 'OpenCode';
+}
+
+function providerDescription(type: string): string {
+  if (type === 'opencode') return 'OpenCode will use its configured default model.';
+  if (type === 'gemini') return 'Requires Gemini CLI on PATH. Model/auth are managed by Gemini.';
+  if (type === 'codex') return 'Requires the codex-acp adapter on PATH. Auth is managed by Codex.';
+  return 'Takes effect on the next message.';
 }

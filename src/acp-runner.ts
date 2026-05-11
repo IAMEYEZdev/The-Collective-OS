@@ -71,6 +71,8 @@ class ClaudeClawAcpClient {
 
 function getAcpCommand(provider: ProviderConfig): { command: string; args: string[] } {
   if (provider.type === 'opencode') return { command: 'opencode', args: ['acp'] };
+  if (provider.type === 'gemini') return { command: 'gemini', args: ['--acp'] };
+  if (provider.type === 'codex') return { command: 'codex-acp', args: [] };
   if (!provider.command) throw new Error('ACP provider requires a command');
   return { command: provider.command, args: provider.args ?? [] };
 }
