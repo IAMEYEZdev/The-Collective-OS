@@ -109,8 +109,13 @@ export interface UsageInfo {
 
 /** Progress event emitted during agent execution for Telegram feedback. */
 export interface AgentProgressEvent {
-  type: 'task_started' | 'task_completed' | 'tool_active';
+  type: 'task_started' | 'task_completed' | 'tool_active' | 'plan';
   description: string;
+  status?: string;
+  kind?: string;
+  toolCallId?: string;
+  locations?: Array<{ path: string; line?: number | null }>;
+  planEntries?: Array<{ content: string; status: string; priority?: string }>;
 }
 
 /** Map SDK tool names to human-readable labels. */

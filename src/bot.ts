@@ -558,14 +558,27 @@ async function handleMessage(ctx: Context, message: string, forceVoiceReply = fa
     const TOOL_NOTIFY_INTERVAL_MS = 30_000;
 
     const onProgress = (event: AgentProgressEvent) => {
+      const progressPayload = {
+        type: 'progress' as const,
+        chatId: chatIdStr,
+        description: event.description,
+        progressKind: event.type,
+        status: event.status,
+        kind: event.kind,
+        toolCallId: event.toolCallId,
+        locations: event.locations,
+        planEntries: event.planEntries,
+      };
       if (event.type === 'task_started') {
-        emitChatEvent({ type: 'progress', chatId: chatIdStr, description: event.description });
+        emitChatEvent(progressPayload);
         void ctx.reply(`🔄 ${event.description}`).catch(() => {});
       } else if (event.type === 'task_completed') {
-        emitChatEvent({ type: 'progress', chatId: chatIdStr, description: event.description });
+        emitChatEvent(progressPayload);
         void ctx.reply(`✓ ${event.description}`).catch(() => {});
+      } else if (event.type === 'plan') {
+        emitChatEvent(progressPayload);
       } else if (event.type === 'tool_active') {
-        emitChatEvent({ type: 'progress', chatId: chatIdStr, description: event.description });
+        emitChatEvent(progressPayload);
         lastToolDesc = event.description;
         // Only send tool notifications to Telegram if streaming is off.
         // When streaming is active, the live text updates already show progress.
@@ -1687,7 +1700,17 @@ async function processDashboardMessage(
     const fullMessage = dashParts.join('\n\n');
 
     const onProgress = (event: AgentProgressEvent) => {
-      emitChatEvent({ type: 'progress', chatId: chatIdStr, description: event.description });
+      emitChatEvent({
+        type: 'progress',
+        chatId: chatIdStr,
+        description: event.description,
+        progressKind: event.type,
+        status: event.status,
+        kind: event.kind,
+        toolCallId: event.toolCallId,
+        locations: event.locations,
+        planEntries: event.planEntries,
+      });
     };
 
     const abortCtrl = new AbortController();

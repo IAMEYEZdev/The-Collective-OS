@@ -43,7 +43,9 @@ class FakeAgent {
       return { stopReason: 'cancelled' };
     }
     await this.conn.sessionUpdate({ sessionId: params.sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'hello ' } } });
-    await this.conn.sessionUpdate({ sessionId: params.sessionId, update: { sessionUpdate: 'tool_call', toolCallId: 'tool-1', title: 'Reading files', kind: 'read', status: 'pending' } });
+    await this.conn.sessionUpdate({ sessionId: params.sessionId, update: { sessionUpdate: 'plan', entries: [{ content: 'Inspect project', priority: 'high', status: 'in_progress' }] } });
+    await this.conn.sessionUpdate({ sessionId: params.sessionId, update: { sessionUpdate: 'tool_call', toolCallId: 'tool-1', title: 'Reading files', kind: 'read', status: 'pending', locations: [{ path: 'README.md', line: 12 }] } });
+    await this.conn.sessionUpdate({ sessionId: params.sessionId, update: { sessionUpdate: 'tool_call_update', toolCallId: 'tool-1', title: 'Reading files', status: 'completed' } });
     await this.conn.sessionUpdate({ sessionId: params.sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'world' } } });
     return { stopReason: 'end_turn' };
   }
@@ -86,13 +88,18 @@ describe('runAcpAgent', () => {
   it('initializes, streams text, reports progress, and returns result', async () => {
     const script = writeFakeAcpAgent('ok');
     const streamed: string[] = [];
-    const progress: string[] = [];
+    const progress: Array<{ description: string; type: string; status?: string; path?: string }> = [];
 
     const result = await runAcpAgent(
       { type: 'acp', command: process.execPath, args: [script] },
       'hi',
       undefined,
-      (event) => progress.push(event.description),
+      (event) => progress.push({
+        description: event.description,
+        type: event.type,
+        status: event.status,
+        path: event.locations?.[0]?.path,
+      }),
       undefined,
       (text) => streamed.push(text),
     );
@@ -101,7 +108,22 @@ describe('runAcpAgent', () => {
     expect(result.newSessionId).toBe('sess-ok');
     expect(result.usage?.inputTokens).toBe(0);
     expect(streamed).toEqual(['hello ', 'hello world']);
-    expect(progress).toContain('Reading files');
+    expect(progress).toContainEqual(expect.objectContaining({
+      description: 'Inspect project',
+      type: 'plan',
+      status: 'in_progress',
+    }));
+    expect(progress).toContainEqual(expect.objectContaining({
+      description: 'Reading files',
+      type: 'tool_active',
+      status: 'pending',
+      path: 'README.md',
+    }));
+    expect(progress).toContainEqual(expect.objectContaining({
+      description: 'Reading files',
+      type: 'tool_active',
+      status: 'completed',
+    }));
   });
 
   it('resumes an existing ACP session id', async () => {

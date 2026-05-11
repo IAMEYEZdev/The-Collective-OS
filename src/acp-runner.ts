@@ -11,6 +11,7 @@ import { ProviderConfig } from './provider.js';
 
 class ClaudeClawAcpClient {
   private accumulatedText = '';
+  private toolTitles = new Map<string, string>();
 
   constructor(
     private readonly onProgress?: (event: AgentProgressEvent) => void,
@@ -34,15 +35,46 @@ class ClaudeClawAcpClient {
       }
       case 'tool_call': {
         const title = typeof update.title === 'string' ? update.title : 'Tool active';
-        this.onProgress?.({ type: 'tool_active', description: title });
+        const toolCallId = typeof update.toolCallId === 'string' ? update.toolCallId : undefined;
+        if (toolCallId) this.toolTitles.set(toolCallId, title);
+        this.onProgress?.({
+          type: 'tool_active',
+          description: title,
+          status: typeof update.status === 'string' ? update.status : 'pending',
+          kind: typeof update.kind === 'string' ? update.kind : undefined,
+          toolCallId,
+          locations: parseLocations(update.locations),
+        });
         break;
       }
       case 'tool_call_update': {
-        const status = typeof update.status === 'string' ? update.status : '';
-        if (status === 'completed' || status === 'failed') {
+        const status = typeof update.status === 'string' ? update.status : undefined;
+        const toolCallId = typeof update.toolCallId === 'string' ? update.toolCallId : undefined;
+        const title = typeof update.title === 'string'
+          ? update.title
+          : toolCallId ? this.toolTitles.get(toolCallId) : undefined;
+        if (toolCallId && title) this.toolTitles.set(toolCallId, title);
+        this.onProgress?.({
+          type: status === 'failed' ? 'task_completed' : 'tool_active',
+          description: title ?? (status ? `Tool ${status}` : 'Tool update'),
+          status,
+          kind: typeof update.kind === 'string' ? update.kind : undefined,
+          toolCallId,
+          locations: parseLocations(update.locations),
+        });
+        break;
+      }
+      case 'plan': {
+        const planEntries = parsePlanEntries(update.entries);
+        const active = planEntries.find((entry) => entry.status === 'in_progress')
+          ?? planEntries.find((entry) => entry.status === 'pending')
+          ?? planEntries[0];
+        if (active) {
           this.onProgress?.({
-            type: status === 'failed' ? 'task_completed' : 'tool_active',
-            description: typeof update.title === 'string' ? update.title : `Tool ${status}`,
+            type: 'plan',
+            description: active.content,
+            status: active.status,
+            planEntries,
           });
         }
         break;
@@ -68,6 +100,37 @@ class ClaudeClawAcpClient {
     fs.writeFileSync(params.path, params.content, 'utf-8');
     return {};
   }
+}
+
+function parseLocations(value: unknown): Array<{ path: string; line?: number | null }> | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const locations: Array<{ path: string; line?: number | null }> = [];
+  for (const item of value) {
+    if (!item || typeof item !== 'object') continue;
+    const raw = item as Record<string, unknown>;
+    if (typeof raw.path !== 'string') continue;
+    const location: { path: string; line?: number | null } = { path: raw.path };
+    if (typeof raw.line === 'number') location.line = raw.line;
+    locations.push(location);
+  }
+  return locations.length ? locations : undefined;
+}
+
+function parsePlanEntries(value: unknown): Array<{ content: string; status: string; priority?: string }> {
+  if (!Array.isArray(value)) return [];
+  const entries: Array<{ content: string; status: string; priority?: string }> = [];
+  for (const item of value) {
+    if (!item || typeof item !== 'object') continue;
+    const raw = item as Record<string, unknown>;
+    if (typeof raw.content !== 'string' || typeof raw.status !== 'string') continue;
+    const entry: { content: string; status: string; priority?: string } = {
+      content: raw.content,
+      status: raw.status,
+    };
+    if (typeof raw.priority === 'string') entry.priority = raw.priority;
+    entries.push(entry);
+  }
+  return entries;
 }
 
 function getAcpCommand(provider: ProviderConfig): { command: string; args: string[] } {
