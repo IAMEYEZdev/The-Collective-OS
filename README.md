@@ -324,7 +324,7 @@ Model-provider credentials are handled by the provider you choose:
 - **OpenCode**: configure provider keys in OpenCode itself with `opencode auth login`. If you want to use GLM, Qwen, DeepSeek, local providers, or another OpenCode-supported provider, set that API key and default model in OpenCode before starting ClaudeClaw. ClaudeClaw does not store those keys in `.env`.
 - **Gemini CLI**: configure Gemini CLI separately, then select Gemini in setup or the dashboard. ClaudeClaw starts `gemini --acp`; Gemini handles its own model and auth.
 - **Custom ACP**: configure the provider and its API keys outside ClaudeClaw, then save the ACP command and args with `npm run provider:setup` or the dashboard Settings page.
-- **Codex ACP adapter**: install and authenticate the `codex-acp` adapter separately, then select Codex. This is adapter-based support, not native Codex ACP.
+- **Codex ACP adapter**: ClaudeClaw includes the `codex-acp` adapter and uses it to connect to your locally signed-in Codex CLI. Run `codex` once in your terminal first to confirm your Codex account is authenticated. This is adapter-based support, not native Codex ACP.
 - **Claude Code**: use `claude login` for subscription/OAuth auth, or set `ANTHROPIC_API_KEY` if you want pay-per-token billing.
 
 ### Telegram Bot Token (required)
@@ -422,7 +422,7 @@ gemini
 npm run provider:setup
 ```
 
-For a custom ACP provider, install and authenticate that provider first, then select "Custom ACP" and enter the command and args. For Codex, install and authenticate `codex-acp` first, then select Codex. The dashboard footer shows the active provider and where model selection is managed.
+For a custom ACP provider, install and authenticate that provider first, then select "Custom ACP" and enter the command and args. For Codex, run `codex` first to confirm the Codex CLI is authenticated, then select Codex. ClaudeClaw uses its bundled `codex-acp` adapter to talk to that local Codex CLI account. The dashboard footer shows the active provider and where model selection is managed.
 
 ---
 
@@ -1569,7 +1569,7 @@ npm run typecheck # Type-check without compiling
 
 **How the Claude Code provider works:** The Agent SDK's `query()` spawns the `claude` binary as a child process. That subprocess manages its own auth from `~/.claude/`. ClaudeClaw never reads or transmits your token. It runs Claude Code and reads the output, identical to typing `claude -p "message"` in a terminal.
 
-**How ACP providers work:** ClaudeClaw starts an ACP command and talks to it over the Agent Client Protocol. Built-in presets currently include `opencode acp`, `gemini --acp`, and the `codex-acp` adapter. OpenCode, Gemini, Codex, or your custom ACP provider owns auth, API keys, and model selection. Configure those before selecting the provider in ClaudeClaw.
+**How ACP providers work:** ClaudeClaw starts an ACP command and talks to it over the Agent Client Protocol. Built-in presets currently include `opencode acp`, `gemini --acp`, and the bundled `codex-acp` adapter. OpenCode, Gemini, Codex CLI, or your custom ACP provider owns auth, API keys, and model selection. Configure those before selecting the provider in ClaudeClaw.
 
 | | ClaudeClaw | Token-extraction tools |
 |---|---|---|

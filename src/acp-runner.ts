@@ -1,4 +1,5 @@
 import { spawn } from 'child_process';
+import path from 'path';
 import { Readable, Writable } from 'stream';
 
 import * as acp from '@agentclientprotocol/sdk';
@@ -77,6 +78,16 @@ function getAcpCommand(provider: ProviderConfig): { command: string; args: strin
   return { command: provider.command, args: provider.args ?? [] };
 }
 
+function getAcpEnv(): NodeJS.ProcessEnv {
+  const localBin = path.join(PROJECT_ROOT, 'node_modules', '.bin');
+  return {
+    ...process.env,
+    PATH: process.env.PATH
+      ? `${process.env.PATH}${path.delimiter}${localBin}`
+      : localBin,
+  };
+}
+
 function emptyUsage(): UsageInfo {
   return {
     inputTokens: 0,
@@ -111,7 +122,7 @@ export async function runAcpAgent(
   const child = spawn(command, args, {
     cwd: agentCwd ?? PROJECT_ROOT,
     stdio: ['pipe', 'pipe', 'pipe'],
-    env: process.env,
+    env: getAcpEnv(),
   });
   const spawnErrorPromise = new Promise<never>((_, reject) => {
     child.once('error', (err: NodeJS.ErrnoException) => {

@@ -121,6 +121,27 @@ function matchesAny(text: string, patterns: string[]): boolean {
   return patterns.some((p) => lower.includes(p));
 }
 
+function commandFromStartError(text: string): string | null {
+  const match = text.match(/Failed to start ACP provider command "([^"]+)"/i);
+  return match?.[1] ?? null;
+}
+
+function providerStartMessage(command: string | null): string {
+  if (command === 'opencode') {
+    return 'OpenCode could not be started. Make sure `opencode` is installed and available on PATH for the ClaudeClaw service.';
+  }
+  if (command === 'gemini') {
+    return 'Gemini CLI could not be started. Make sure `gemini` is installed, authenticated, and available on PATH for the ClaudeClaw service.';
+  }
+  if (command === 'codex-acp') {
+    return 'Codex ACP could not be started. ClaudeClaw uses `codex-acp` to connect to your existing signed-in Codex CLI account. Run `codex` once to confirm you are signed in, then reinstall dependencies and restart ClaudeClaw if the adapter is missing.';
+  }
+  if (command) {
+    return `ACP provider command \`${command}\` could not be started. Make sure it is installed and available on PATH for the ClaudeClaw service.`;
+  }
+  return 'ACP provider could not be started. Make sure the selected provider command is installed and available on PATH for the ClaudeClaw service.';
+}
+
 // ── Classification ──────────────────────────────────────────────────
 
 /**
@@ -173,7 +194,7 @@ export function classifyError(err: unknown, contextTokens?: number): AgentError 
       shouldNewChat: false,
       shouldSwitchModel: false,
       retryAfterMs: 0,
-      userMessage: 'OpenCode could not be started. Make sure `opencode` is installed and available on PATH for the ClaudeClaw service, or switch the provider back to Claude.',
+      userMessage: providerStartMessage(commandFromStartError(text)),
     }, raw);
   }
 
