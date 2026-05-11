@@ -84,7 +84,7 @@ Follow these steps in order. The whole thing takes about 5 minutes.
 |-------------|-------|
 | **Node.js 20+** | Check: `node --version`. Download at [nodejs.org](https://nodejs.org) |
 | **Git** | Check: `git --version`. If you've never used git, also run the two commands below |
-| **Agent provider** | OpenCode (`opencode auth login`), Gemini CLI (`gemini --acp`), another ACP command, or Claude Code (`claude login`) |
+| **Agent provider** | OpenCode (`opencode auth login`), Gemini CLI (`gemini --acp`), Codex CLI (`codex`), another ACP command, or Claude Code (`claude login`) |
 | **Telegram account** | Any existing account works |
 
 **First time using git?** Run these two commands first (use your own name and email):
@@ -98,7 +98,7 @@ Without this, git operations will fail with a confusing error about missing iden
 
 **Using Claude Code?** ClaudeClaw can run the `claude` CLI, so any Claude plan works (Free, Pro, Max). However, complex multi-step tasks (building skills, debugging code, multi-agent work) perform significantly better on **Opus**. If you're on the Free or Pro plan and Claude struggles with a task, the model matters. Sonnet is fast but often can't handle the kind of agentic work ClaudeClaw enables. Max ($100 or $200) with Opus is the recommended Claude Code experience.
 
-**Prefer open/source-compatible providers?** Choose OpenCode, Gemini CLI, or another ACP provider during setup. ClaudeClaw starts the provider command and the provider decides which model/API key to use from its own config. OpenCode runs as `opencode acp`; Gemini runs as `gemini --acp`; custom providers use the command and args you enter. GLM, Qwen, DeepSeek, local providers, Gemini API keys, and any other model credentials must be configured in the provider first. ClaudeClaw does not store those provider API keys in `.env`.
+**Prefer open/source-compatible providers?** Choose OpenCode, Gemini CLI, Codex, or another ACP provider during setup. ClaudeClaw starts the provider command and the provider decides which model/API key to use from its own config. OpenCode runs as `opencode acp`; Gemini runs as `gemini --acp`; Codex uses the bundled `codex-acp` adapter; custom providers use the command and args you enter. GLM, Qwen, DeepSeek, local providers, Gemini API keys, and any other model credentials must be configured in the provider first. ClaudeClaw does not store those provider API keys in `.env`.
 
 **New to the terminal?** Download [Warp](https://www.warp.dev), it's a modern terminal with AI built in. If you hit any OS-level issues during setup (permissions, missing tools, PATH problems), type `/agent` in Warp and describe what went wrong. It will walk you through fixing it. This alone will save you hours of Googling.
 
@@ -281,7 +281,7 @@ Pick one of:
 - **Long-lived OAuth token (Max plan).** On your local machine run `claude setup-token`. It prints a token that does not expire on its own. Set it on your cloud host as `CLAUDE_CODE_OAUTH_TOKEN=<token>`. Redeploy.
 - **API key (pay per token).** Get a key from [console.anthropic.com](https://console.anthropic.com). Set `ANTHROPIC_API_KEY=<key>`. This bypasses your subscription and bills per request.
 
-For **ACP providers**, install the provider command in the container or VM and configure its credentials there before starting ClaudeClaw. OpenCode needs `opencode auth login` plus a default model. Gemini CLI needs its own auth/config and runs through `gemini --acp`. Custom ACP providers need the command and args available on PATH. Codex support is adapter-based via `codex-acp` and should be treated as experimental until Codex exposes a native ACP entrypoint. ClaudeClaw only stores the provider type or command; it does not copy model-provider keys into `.env`.
+For **ACP providers**, install the provider command in the container or VM and configure its credentials there before starting ClaudeClaw. OpenCode needs `opencode auth login` plus a default model. Gemini CLI needs its own auth/config and runs through `gemini --acp`. Codex needs the Codex CLI authenticated with `codex`; ClaudeClaw launches its bundled `codex-acp` adapter. Custom ACP providers need the command and args available on PATH. ClaudeClaw only stores the provider type, model/settings, or custom command; it does not copy model-provider keys into `.env`.
 
 ### 2. Container storage is ephemeral
 
@@ -422,7 +422,9 @@ gemini
 npm run provider:setup
 ```
 
-For a custom ACP provider, install and authenticate that provider first, then select "Custom ACP" and enter the command and args. For Codex, run `codex` first to confirm the Codex CLI is authenticated, then select Codex. ClaudeClaw uses its bundled `codex-acp` adapter to talk to that local Codex CLI account. The dashboard footer shows the active provider and where model selection is managed.
+For Codex, install/authenticate the Codex CLI first, then run `codex` once in your terminal to confirm it works. ClaudeClaw includes the `@zed-industries/codex-acp` package and launches the bundled `codex-acp` adapter for you, so you normally do not need to install a separate `codex-acp` binary globally.
+
+For a custom ACP provider, install and authenticate that provider first, then select "Custom ACP" and enter the command and args. The dashboard Settings page can save provider-specific model ids, thinking levels, and speed options when the provider advertises them through ACP `session/configuration`. Access/sandbox mode is not exposed as a setting: ClaudeClaw runs providers in full-access mode when the ACP provider offers it, because this is an autonomous local assistant.
 
 ---
 
@@ -532,7 +534,7 @@ Claude can also send photos inline using `[SEND_PHOTO:/path]`, and attach captio
 
 ### Sessions persist
 
-Claude Code sessions carry full context across messages. Reference something from earlier. Claude knows. Send `/newchat` to start fresh.
+Provider sessions carry context across messages. ClaudeClaw namespaces session ids by provider, so switching between Claude, OpenCode, Gemini, Codex, and custom ACP starts or resumes the right provider session instead of mixing histories. Send `/newchat` to start fresh.
 
 ### Skills load automatically
 
@@ -548,10 +550,10 @@ Every skill in `~/.claude/skills/` loads on every session. Call them directly (`
 |---------|-------------|
 | `/help` | List all available commands |
 | `/stop` | Cancel the current agent query mid-execution. works from Telegram and the dashboard |
-| `/model` | Switch Claude model for this chat when the active provider is Claude |
-| `/provider` | Show the active provider and where its model is selected |
+| `/model` | Switch Claude model for this chat when the active provider is Claude. For all providers, the dashboard Settings page is the main model picker |
+| `/provider` | Show the active provider and where its model/thinking settings are selected |
 | `/voice` | Toggle voice replies on/off for all messages. When off, voice notes still get transcribed and executed. replies just come back as text |
-| `/newchat` | Wipe the Claude Code session and start fresh. Use when context gets stale or the conversation window is filling up |
+| `/newchat` | Wipe the active provider session and start fresh. Use when context gets stale or the conversation window is filling up |
 | `/respin` | Pull the last 20 conversation turns back into a fresh session. Run this right after `/newchat` to keep recent context without the full token weight |
 | `/memory` | Show what the bot remembers about you (recent memories from SQLite) |
 | `/forget` | Clear the session ID only. Memories stay and decay naturally over time |
@@ -1105,7 +1107,7 @@ ClaudeClaw has a structured memory system that extracts, consolidates, and recal
 
 ### Layer 1. Session resumption
 
-Every time you send a message, Claude Code resumes the same session using a stored session ID. This means Claude carries your full conversation history across messages without you re-sending anything. It's the same as if you never left the terminal.
+Every time you send a message, the selected provider resumes the same provider-specific session using a stored session ID. This means Claude, OpenCode, Gemini, Codex, or your custom ACP provider carries the conversation history across messages without you re-sending anything. Switching providers uses a separate session namespace so one provider does not inherit another provider's opaque session id.
 
 Use `/newchat` to start a completely fresh session when you want a clean slate.
 
@@ -1558,6 +1560,7 @@ npm run build     # Compile TypeScript → dist/
 npm start         # Run compiled bot (production)
 npm run dev       # Run with tsx, no build needed (development)
 npm test          # Run test suite (vitest)
+npm run test:e2e  # Run local Playwright dashboard tests with fake providers
 npm run typecheck # Type-check without compiling
 ```
 
@@ -1569,7 +1572,7 @@ npm run typecheck # Type-check without compiling
 
 **How the Claude Code provider works:** The Agent SDK's `query()` spawns the `claude` binary as a child process. That subprocess manages its own auth from `~/.claude/`. ClaudeClaw never reads or transmits your token. It runs Claude Code and reads the output, identical to typing `claude -p "message"` in a terminal.
 
-**How ACP providers work:** ClaudeClaw starts an ACP command and talks to it over the Agent Client Protocol. Built-in presets currently include `opencode acp`, `gemini --acp`, and the bundled `codex-acp` adapter. OpenCode, Gemini, Codex CLI, or your custom ACP provider owns auth, API keys, and model selection. Configure those before selecting the provider in ClaudeClaw.
+**How ACP providers work:** ClaudeClaw starts an ACP command and talks to it over the Agent Client Protocol. Built-in presets currently include `opencode acp`, `gemini --acp`, and the bundled `codex-acp` adapter. OpenCode, Gemini, Codex CLI, or your custom ACP provider owns auth, API keys, and model availability. Configure auth before selecting the provider in ClaudeClaw; model, thinking, and speed preferences can be saved from the dashboard when the provider supports those ACP settings.
 
 | | ClaudeClaw | Token-extraction tools |
 |---|---|---|
@@ -1602,7 +1605,7 @@ These protections are active in every ClaudeClaw installation, no configuration 
 | **Message encryption** | WhatsApp and Slack message bodies are encrypted with AES-256-GCM before being written to the database. The key is stored in `.env` (gitignored). |
 | **Message auto-purge** | A 3-day retention sweep runs on startup and every 24 hours, deleting all message data from `wa_messages`, `wa_outbox`, `wa_message_map`, and `slack_messages`. |
 
-**`bypassPermissions` mode.** The bot runs Claude Code with `permissionMode: 'bypassPermissions'` because there is no terminal to approve tool-use prompts. Claude can execute any tool (shell commands, file reads, web requests) without confirmation. This is safe when the bot is locked to your chat ID on your own machine. Do not expose it to untrusted users.
+**Full-access execution.** This is an autonomous local assistant, so provider turns run without interactive tool approval. Claude Code uses `permissionMode: 'bypassPermissions'`; ACP providers run in full-access mode when they advertise an access/sandbox config option. The agent can execute tools such as shell commands, file reads, and web requests without confirmation. This is safe only when the bot is locked to your chat ID on your own machine. Do not expose it to untrusted users.
 
 ### PIN lock (opt-in)
 
@@ -1672,7 +1675,7 @@ Or view it in the dashboard via the API: `GET /api/audit?limit=50`.
 **Can't access the internet / "break out"**
 - ClaudeClaw runs your selected provider locally. Claude Code, OpenCode, Gemini CLI, and custom ACP providers each expose their own tools and network behavior.
 - If the agent says it can't access the internet, first verify the selected provider works in a normal terminal session.
-- For Claude Code: run `claude` and ask it to search the web. For OpenCode: run `opencode`, confirm the configured model works, and make sure any provider API keys are set in OpenCode. For Gemini or custom ACP, run the provider command directly and confirm it is authenticated.
+- For Claude Code: run `claude` and ask it to search the web. For OpenCode: run `opencode`, confirm the configured model works, and make sure any provider API keys are set in OpenCode. For Gemini: run `gemini` and confirm it is authenticated. For Codex: run `codex` and confirm your account/session works. For custom ACP, run the provider command directly and confirm it is authenticated.
 
 **Voice notes return an error**
 - `GROQ_API_KEY` must be in `.env` and the bot restarted after adding it
@@ -1790,7 +1793,8 @@ claudeclaw/
 ├── src/
 │   ├── index.ts             Main entrypoint. starts everything
 │   ├── bot.ts               Handles all Telegram messages (text, voice, photo, etc.)
-│   ├── agent.ts             Runs Claude Code via Agent SDK
+│   ├── agent.ts             Provider orchestration wrapper around the agent engine
+│   ├── agent-engine/        Normalized provider engine: Claude SDK + ACP adapters
 │   ├── agent-config.ts      Loads agent YAML configs and CLAUDE.md templates
 │   ├── orchestrator.ts      Agent delegation routing (@agent: syntax)
 │   ├── db.ts                SQLite database. all tables and queries

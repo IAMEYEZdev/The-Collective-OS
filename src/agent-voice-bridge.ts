@@ -12,7 +12,6 @@
  * reads the JSON response, and pipes the text to TTS.
  */
 
-import { query } from '@anthropic-ai/claude-agent-sdk';
 import fs from 'fs';
 import yaml from 'js-yaml';
 import { readEnvFile } from './env.js';
@@ -23,6 +22,7 @@ import { requireEnabled, KillSwitchDisabledError } from './kill-switches.js';
 import { loadMcpServers } from './agent.js';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { EngineFactory } from './agent-engine/index.js';
 
 // The voice bridge is a standalone subprocess — initialize the DB
 // connection before any getSession/setSession calls run. Without this,
@@ -60,20 +60,6 @@ for (let i = 0; i < args.length; i++) {
 if (!message) {
   console.error(JSON.stringify({ response: null, usage: null, error: 'No --message provided' }));
   process.exit(1);
-}
-
-async function* singleTurn(text: string): AsyncGenerator<{
-  type: 'user';
-  message: { role: 'user'; content: string };
-  parent_tool_use_id: null;
-  session_id: string;
-}> {
-  yield {
-    type: 'user',
-    message: { role: 'user', content: text },
-    parent_tool_use_id: null,
-    session_id: '',
-  };
 }
 
 async function main() {
@@ -152,36 +138,31 @@ async function main() {
     let newSessionId: string | undefined;
     let usage: Record<string, number> = {};
 
-    for await (const event of query({
-      prompt: singleTurn(fullMessage),
-      options: {
-        cwd: agentDir,
-        resume: sessionId,
-        settingSources: ['project', 'user'],
-        permissionMode: 'bypassPermissions',
-        allowDangerouslySkipPermissions: true,
-        // Quick mode caps turns hard so an auto-routed voice answer
-        // can't spiral into a 30s tool-use loop. Direct mode keeps the
-        // higher ceiling for more substantive voice conversations.
-        maxTurns: quickMode ? 3 : 15,
-        env: sdkEnv,
-        ...(mcpServerNames.length > 0 ? { mcpServers } : {}),
-      },
+    const engine = EngineFactory.forProvider({ type: 'claude' });
+    for await (const event of engine.invoke({
+      prompt: fullMessage,
+      provider: { type: 'claude' },
+      cwd: agentDir,
+      sessionId,
+      settingSources: ['project', 'user'],
+      permissionMode: 'bypassPermissions',
+      allowDangerouslySkipPermissions: true,
+      // Quick mode caps turns hard so an auto-routed voice answer
+      // can't spiral into a 30s tool-use loop. Direct mode keeps the
+      // higher ceiling for more substantive voice conversations.
+      maxTurns: quickMode ? 3 : 15,
+      env: sdkEnv,
+      ...(mcpServerNames.length > 0 ? { mcpServers } : {}),
     })) {
-      const ev = event as Record<string, unknown>;
+      if (event.type === 'session') newSessionId = event.sessionId;
 
-      if (ev['type'] === 'system' && ev['subtype'] === 'init') {
-        newSessionId = ev['session_id'] as string;
-      }
-
-      if (ev['type'] === 'result') {
-        resultText = (ev['result'] as string | null | undefined) ?? null;
-        const evUsage = ev['usage'] as Record<string, number> | undefined;
-        if (evUsage) {
+      if (event.type === 'result') {
+        resultText = event.text;
+        if (event.usage) {
           usage = {
-            input_tokens: evUsage['input_tokens'] ?? 0,
-            output_tokens: evUsage['output_tokens'] ?? 0,
-            cost_usd: (ev['total_cost_usd'] as number) ?? 0,
+            input_tokens: event.usage.inputTokens,
+            output_tokens: event.usage.outputTokens,
+            cost_usd: event.usage.totalCostUsd,
           };
         }
       }

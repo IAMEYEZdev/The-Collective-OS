@@ -1,10 +1,10 @@
-import { query } from '@anthropic-ai/claude-agent-sdk';
 import { generateContent, parseJsonResponse } from './gemini.js';
 import { cosineSimilarity, embedText } from './embeddings.js';
 import { getMemoriesWithEmbeddings, saveStructuredMemoryAtomic } from './db.js';
 import { logger } from './logger.js';
 import { readEnvFile } from './env.js';
 import { getScrubbedSdkEnv } from './security.js';
+import { EngineFactory } from './agent-engine/index.js';
 
 // Callback for notifying when a high-importance memory is created.
 // Set by bot.ts to send a Telegram notification.
@@ -43,37 +43,22 @@ export async function extractViaClaude(prompt: string, timeoutMs = 15_000): Prom
   const timer = setTimeout(() => abort.abort(), timeoutMs);
   let text = '';
   try {
-    async function* turn(): AsyncGenerator<{
-      type: 'user';
-      message: { role: 'user'; content: string };
-      parent_tool_use_id: null;
-      session_id: string;
-    }> {
-      yield {
-        type: 'user',
-        message: { role: 'user', content: prompt },
-        parent_tool_use_id: null,
-        session_id: '',
-      };
-    }
-    for await (const ev of query({
-      prompt: turn(),
-      options: {
-        model: 'claude-haiku-4-5-20251001',
-        allowedTools: [],
-        disallowedTools: ['*'],
-        settingSources: [],
-        maxTurns: 1,
-        permissionMode: 'bypassPermissions',
-        allowDangerouslySkipPermissions: true,
-        env,
-        abortController: abort,
-      } as any,
+    const engine = EngineFactory.forProvider({ type: 'claude' });
+    for await (const ev of engine.invoke({
+      prompt,
+      provider: { type: 'claude' },
+      cwd: process.cwd(),
+      model: 'claude-haiku-4-5-20251001',
+      allowedTools: [],
+      disallowedTools: ['*'],
+      settingSources: [],
+      maxTurns: 1,
+      permissionMode: 'bypassPermissions',
+      allowDangerouslySkipPermissions: true,
+      env,
+      abortController: abort,
     })) {
-      const e = ev as Record<string, unknown>;
-      if (e.type === 'result' && typeof e.result === 'string') {
-        text = e.result;
-      }
+      if (ev.type === 'result' && typeof ev.text === 'string') text = ev.text;
     }
   } catch (err) {
     logger.warn({ err: err instanceof Error ? err.message : err }, 'Memory extraction (Claude Haiku) failed');

@@ -5,7 +5,7 @@ import { ROUTES, SECTION_LABEL, type RouteSection } from '@/lib/routes';
 import { WorkspaceSwitcher } from './WorkspaceSwitcher';
 import { commandPaletteOpen } from '@/lib/command-palette';
 import { chatUnread } from '@/lib/chat-stream';
-import { useFetch } from '@/lib/useFetch';
+import { invalidateFetchCache, useFetch } from '@/lib/useFetch';
 import { apiPatch } from '@/lib/api';
 import { pushToast } from '@/lib/toasts';
 import { sidebarOpen, closeSidebar } from '@/lib/sidebar';
@@ -144,6 +144,9 @@ function SidebarFooter() {
         ? { type: 'claude', model: 'claude-opus-4-6' }
         : { type: nextType };
       await apiPatch('/api/agents/main/provider', { provider: nextProvider });
+      invalidateFetchCache('/api/provider/status');
+      invalidateFetchCache('/api/health');
+      invalidateFetchCache('/api/agents');
       provider.refresh();
       health.refresh();
       pushToast({

@@ -5,6 +5,7 @@ import path from 'path';
 import { pathToFileURL } from 'url';
 
 import { runAcpAgent } from './acp-runner.js';
+import { inspectAcpProviderRuntimeOptions } from './agent-engine/acp-adapter.js';
 
 const tmpDirs: string[] = [];
 
@@ -29,10 +30,38 @@ class FakeAgent {
       agentCapabilities: ${mode === 'noresume' ? '{ loadSession: false }' : '{ loadSession: false, session: { resume: true } }'},
     };
   }
-  async newSession() { const id = 'sess-' + ${JSON.stringify(mode)}; this.sessions.add(id); return { sessionId: id }; }
+  async newSession() {
+    const id = 'sess-' + ${JSON.stringify(mode)};
+    this.sessions.add(id);
+    if (${JSON.stringify(mode)} === 'config') {
+      return {
+        sessionId: id,
+        configOptions: [
+          { id: 'mode', name: 'Mode', category: 'mode', type: 'select', currentValue: 'normal', options: [{ value: 'fast', name: 'Fast' }, { value: 'normal', name: 'Normal' }, { value: 'deep', name: 'Deep' }] },
+          { id: 'thought', name: 'Thinking', category: 'thought_level', type: 'select', currentValue: 'medium', options: [{ value: 'low', name: 'Low' }, { value: 'medium', name: 'Medium' }, { value: 'high', name: 'High' }, { value: 'xhigh', name: 'Extra high' }] },
+        ],
+      };
+    }
+    if (${JSON.stringify(mode)} === 'access') {
+      return {
+        sessionId: id,
+        configOptions: [
+          { id: 'mode', name: 'Mode', category: 'mode', type: 'select', currentValue: 'auto', options: [{ value: 'read-only', name: 'Read only' }, { value: 'auto', name: 'Auto' }, { value: 'full-access', name: 'Full access' }] },
+          { id: 'thought', name: 'Thinking', category: 'thought_level', type: 'select', currentValue: 'medium', options: [{ value: 'low', name: 'Low' }, { value: 'medium', name: 'Medium' }, { value: 'high', name: 'High' }, { value: 'xhigh', name: 'Extra high' }] },
+        ],
+      };
+    }
+    return { sessionId: id };
+  }
   async resumeSession(params) { this.sessions.add(params.sessionId); return {}; }
   async authenticate() { return {}; }
   async setSessionMode() { return {}; }
+  async setSessionConfigOption(params) {
+    if (params.configId === 'mode') this.currentMode = params.value;
+    if (params.configId === 'thought') this.currentThought = params.value;
+    return { configOptions: [] };
+  }
+  async unstable_setSessionModel(params) { this.currentModel = params.modelId; return {}; }
   async prompt(params) {
     if (${JSON.stringify(mode)} === 'error') throw new Error('fake acp failure');
     if (${JSON.stringify(mode)} === 'abort') {
@@ -41,6 +70,18 @@ class FakeAgent {
         this.pending.set(params.sessionId, () => { clearTimeout(t); resolve(); });
       });
       return { stopReason: 'cancelled' };
+    }
+    if (${JSON.stringify(mode)} === 'model') {
+      await this.conn.sessionUpdate({ sessionId: params.sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: this.currentModel || 'no-model' } } });
+      return { stopReason: 'end_turn' };
+    }
+    if (${JSON.stringify(mode)} === 'config') {
+      await this.conn.sessionUpdate({ sessionId: params.sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: (this.currentMode || 'no-mode') + '/' + (this.currentThought || 'no-thought') } } });
+      return { stopReason: 'end_turn' };
+    }
+    if (${JSON.stringify(mode)} === 'access') {
+      await this.conn.sessionUpdate({ sessionId: params.sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: this.currentMode || 'no-mode' } } });
+      return { stopReason: 'end_turn' };
     }
     await this.conn.sessionUpdate({ sessionId: params.sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'hello ' } } });
     await this.conn.sessionUpdate({ sessionId: params.sessionId, update: { sessionUpdate: 'plan', entries: [{ content: 'Inspect project', priority: 'high', status: 'in_progress' }] } });
@@ -181,6 +222,59 @@ describe('runAcpAgent', () => {
     } finally {
       process.env.PATH = oldPath;
     }
+  });
+
+  it('sets ACP session model when provider model is configured', async () => {
+    const script = writeFakeAcpAgent('model');
+    const result = await runAcpAgent(
+      { type: 'acp', command: process.execPath, args: [script], model: 'fake-model-1' },
+      'hi',
+      undefined,
+    );
+
+    expect(result.text).toBe('fake-model-1');
+  });
+
+  it('sets ACP runtime and thinking config when advertised', async () => {
+    const script = writeFakeAcpAgent('config');
+    const result = await runAcpAgent(
+      { type: 'acp', command: process.execPath, args: [script], runtimeMode: 'deep', thinkingMode: 'xhigh' },
+      'hi',
+      undefined,
+    );
+
+    expect(result.text).toBe('deep/xhigh');
+  });
+
+  it('inspects ACP provider runtime and thinking options', async () => {
+    const script = writeFakeAcpAgent('config');
+    const result = await inspectAcpProviderRuntimeOptions(
+      { type: 'acp', command: process.execPath, args: [script] },
+      process.cwd(),
+      2000,
+    );
+
+    expect(result.source).toBe('provider');
+    expect(result.modeOptions).toContainEqual(expect.objectContaining({ id: 'deep', label: 'Deep' }));
+    expect(result.thinkingOptions).toContainEqual(expect.objectContaining({ id: 'xhigh', label: 'Extra high' }));
+  });
+
+  it('does not expose access modes as speed options and forces full access', async () => {
+    const script = writeFakeAcpAgent('access');
+    const inspected = await inspectAcpProviderRuntimeOptions(
+      { type: 'acp', command: process.execPath, args: [script] },
+      process.cwd(),
+      2000,
+    );
+    expect(inspected.modeOptions).toEqual([]);
+    expect(inspected.thinkingOptions).toContainEqual(expect.objectContaining({ id: 'xhigh' }));
+
+    const result = await runAcpAgent(
+      { type: 'acp', command: process.execPath, args: [script] },
+      'hi',
+      undefined,
+    );
+    expect(result.text).toBe('full-access');
   });
 
   it('surfaces ACP errors', async () => {

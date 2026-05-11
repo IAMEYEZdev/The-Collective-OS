@@ -188,7 +188,7 @@ describe('provider config', () => {
     expect(loadAgentConfig('codex-agent').provider).toEqual({ type: 'codex' });
   });
 
-  it('persists provider and removes legacy model', async () => {
+  it('persists provider model and removes legacy model', async () => {
     const yamlPath = writeAgentYaml('switcher', {
       name: 'Switcher',
       description: 'switch',
@@ -197,12 +197,27 @@ describe('provider config', () => {
     });
 
     const { setAgentProvider, loadAgentConfig } = await import('./agent-config.js');
-    setAgentProvider('switcher', { type: 'opencode' });
+    setAgentProvider('switcher', {
+      type: 'opencode',
+      model: 'opencode/gpt-5.3-codex',
+      runtimeMode: 'deep',
+      thinkingMode: 'on',
+    });
 
     const raw = yaml.load(fs.readFileSync(yamlPath, 'utf-8')) as Record<string, unknown>;
     expect(raw.model).toBeUndefined();
-    expect(raw.provider).toEqual({ type: 'opencode' });
-    expect(loadAgentConfig('switcher').provider).toEqual({ type: 'opencode' });
+    expect(raw.provider).toEqual({
+      type: 'opencode',
+      model: 'opencode/gpt-5.3-codex',
+      runtimeMode: 'deep',
+      thinkingMode: 'on',
+    });
+    expect(loadAgentConfig('switcher').provider).toEqual({
+      type: 'opencode',
+      model: 'opencode/gpt-5.3-codex',
+      runtimeMode: 'deep',
+      thinkingMode: 'on',
+    });
   });
 
   it('namespaces sessions by provider so switched providers start fresh', async () => {

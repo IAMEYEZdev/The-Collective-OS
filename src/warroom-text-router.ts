@@ -1,8 +1,8 @@
 /**
  * Text War Room router and intervention gate.
  *
- * Both functions issue a locked-down `query()` call through the Claude Agent
- * SDK — same OAuth/subscription path Telegram and the voice bridge use. No
+ * Both functions issue a locked-down engine call through the Claude Agent
+ * SDK adapter — same OAuth/subscription path Telegram and the voice bridge use. No
  * API key required. The prompts run on Haiku with zero tools, no CLAUDE.md
  * loading, no settings sources: pure classifier mode.
  *
@@ -12,11 +12,12 @@
  * decision so the UI can show a subtle "degraded routing" indicator.
  */
 
-import { query } from '@anthropic-ai/claude-agent-sdk';
 import { readEnvFile } from './env.js';
 import { logger } from './logger.js';
 import { getScrubbedSdkEnv } from './security.js';
 import { isEnabled } from './kill-switches.js';
+import { PROJECT_ROOT } from './config.js';
+import { EngineFactory } from './agent-engine/index.js';
 
 const ROUTER_MODEL = 'claude-haiku-4-5-20251001';
 // Budget: Claude Agent SDK subprocess cold-start is ~3-5s before the first
@@ -66,18 +67,26 @@ function sdkEnvStripped(): Record<string, string | undefined> {
   return getScrubbedSdkEnv(secrets);
 }
 
-async function* singleTurn(text: string): AsyncGenerator<{
-  type: 'user';
-  message: { role: 'user'; content: string };
-  parent_tool_use_id: null;
-  session_id: string;
-}> {
-  yield {
-    type: 'user',
-    message: { role: 'user', content: text },
-    parent_tool_use_id: null,
-    session_id: '',
-  };
+async function runClassifierTurn(prompt: string, abort: AbortController): Promise<string> {
+  const engine = EngineFactory.forProvider({ type: 'claude' });
+  let text = '';
+  for await (const ev of engine.invoke({
+    prompt,
+    provider: { type: 'claude' },
+    cwd: PROJECT_ROOT,
+    model: ROUTER_MODEL,
+    allowedTools: [],
+    disallowedTools: ['*'],
+    settingSources: [],
+    maxTurns: 1,
+    permissionMode: 'bypassPermissions',
+    allowDangerouslySkipPermissions: true,
+    env: sdkEnvStripped(),
+    abortController: abort,
+  })) {
+    if (ev.type === 'result') text = ev.text ?? '';
+  }
+  return text;
 }
 
 /**
@@ -216,23 +225,7 @@ export async function routeMessage(ctx: RouterContext): Promise<RouterDecision> 
   const t0 = Date.now();
 
   try {
-    for await (const ev of query({
-      prompt: singleTurn(prompt),
-      options: {
-        model: ROUTER_MODEL,
-        allowedTools: [],
-        disallowedTools: ['*'],
-        settingSources: [],
-        maxTurns: 1,
-        permissionMode: 'bypassPermissions',
-        allowDangerouslySkipPermissions: true,
-        env: sdkEnvStripped(),
-        abortController: abort,
-      } as any,
-    })) {
-      const e = ev as Record<string, unknown>;
-      if (e.type === 'result') text = (e.result as string | undefined) ?? '';
-    }
+    text = await runClassifierTurn(prompt, abort);
   } catch (err) {
     logger.warn({
       err: err instanceof Error ? err.message : err,
@@ -307,23 +300,7 @@ export async function interventionGate(ctx: InterventionContext): Promise<Interv
   let text = '';
 
   try {
-    for await (const ev of query({
-      prompt: singleTurn(buildGatePrompt(ctx)),
-      options: {
-        model: ROUTER_MODEL,
-        allowedTools: [],
-        disallowedTools: ['*'],
-        settingSources: [],
-        maxTurns: 1,
-        permissionMode: 'bypassPermissions',
-        allowDangerouslySkipPermissions: true,
-        env: sdkEnvStripped(),
-        abortController: abort,
-      } as any,
-    })) {
-      const e = ev as Record<string, unknown>;
-      if (e.type === 'result') text = (e.result as string | undefined) ?? '';
-    }
+    text = await runClassifierTurn(buildGatePrompt(ctx), abort);
   } catch (err) {
     logger.warn({ err: err instanceof Error ? err.message : err, candidate: ctx.candidateAgentId }, 'intervention gate failed');
     clearTimeout(timer);

@@ -5,11 +5,17 @@ import yaml from 'js-yaml';
 import { STORE_DIR } from './config.js';
 
 export type ProviderType = 'claude' | 'acp' | 'opencode' | 'gemini' | 'codex';
+export type ProviderRuntimeMode = string;
+export type ProviderThinkingMode = string;
 
 export interface ProviderConfig {
   type: ProviderType;
-  /** Claude-only model override. ACP/OpenCode model defaults live in the provider. */
+  /** Optional model override. ACP providers receive this via session/set_model when supported. */
   model?: string;
+  /** Provider-specific latency/depth preference. Claude maps known values to effort; ACP uses exact config values. */
+  runtimeMode?: ProviderRuntimeMode;
+  /** Provider-specific thinking preference. Claude maps known values to thinking; ACP uses exact config values. */
+  thinkingMode?: ProviderThinkingMode;
   /** Generic ACP command. Built-in ACP presets supply their own commands. */
   command?: string;
   args?: string[];
@@ -17,6 +23,7 @@ export interface ProviderConfig {
 
 export const DEFAULT_PROVIDER: ProviderConfig = { type: 'opencode' };
 export const DEFAULT_CLAUDE_MODEL = 'claude-opus-4-6';
+export const DEFAULT_CODEX_MODEL = 'gpt-5.5';
 
 export function normalizeProviderConfig(input: unknown, legacyModel?: string): ProviderConfig {
   const raw = input && typeof input === 'object' ? input as Record<string, unknown> : {};
@@ -25,6 +32,8 @@ export function normalizeProviderConfig(input: unknown, legacyModel?: string): P
   if (typeRaw === 'claude' || typeRaw === 'acp' || typeRaw === 'opencode' || typeRaw === 'gemini' || typeRaw === 'codex') {
     const cfg: ProviderConfig = { type: typeRaw };
     if (typeof raw.model === 'string' && raw.model.trim()) cfg.model = raw.model.trim();
+    if (typeof raw.runtimeMode === 'string' && raw.runtimeMode.trim()) cfg.runtimeMode = raw.runtimeMode.trim();
+    if (typeof raw.thinkingMode === 'string' && raw.thinkingMode.trim()) cfg.thinkingMode = raw.thinkingMode.trim();
     if (typeof raw.command === 'string' && raw.command.trim()) cfg.command = raw.command.trim();
     if (Array.isArray(raw.args)) cfg.args = raw.args.filter((v): v is string => typeof v === 'string');
     return cfg;
@@ -39,7 +48,9 @@ export function normalizeProviderConfig(input: unknown, legacyModel?: string): P
 
 export function providerToYaml(provider: ProviderConfig): Record<string, unknown> {
   const raw: Record<string, unknown> = { type: provider.type };
-  if (provider.model && provider.type === 'claude') raw.model = provider.model;
+  if (provider.model) raw.model = provider.model;
+  if (provider.runtimeMode) raw.runtimeMode = provider.runtimeMode;
+  if (provider.thinkingMode) raw.thinkingMode = provider.thinkingMode;
   if (provider.type === 'acp') {
     if (provider.command) raw.command = provider.command;
     if (provider.args) raw.args = provider.args;
@@ -79,11 +90,16 @@ export function setMainProviderConfig(provider: ProviderConfig): void {
 }
 
 export function getProviderDisplay(provider: ProviderConfig): string {
-  if (provider.type === 'claude') return `Claude${provider.model ? ` (${provider.model})` : ''}`;
-  if (provider.type === 'opencode') return 'OpenCode (model from OpenCode config)';
-  if (provider.type === 'gemini') return 'Gemini CLI (ACP)';
-  if (provider.type === 'codex') return 'Codex (codex-acp adapter)';
-  return `ACP (${provider.command ?? 'custom command'}${provider.args?.length ? ` ${provider.args.join(' ')}` : ''})`;
+  const suffix = [
+    provider.model,
+    provider.runtimeMode,
+    provider.thinkingMode && provider.thinkingMode !== 'auto' ? `thinking ${provider.thinkingMode}` : undefined,
+  ].filter(Boolean).join(', ');
+  if (provider.type === 'claude') return `Claude${suffix ? ` (${suffix})` : ''}`;
+  if (provider.type === 'opencode') return `OpenCode${suffix ? ` (${suffix})` : ' (model from OpenCode config)'}`;
+  if (provider.type === 'gemini') return `Gemini CLI${suffix ? ` (${suffix})` : ' (ACP)'}`;
+  if (provider.type === 'codex') return `Codex${suffix ? ` (${suffix})` : ' (codex-acp adapter)'}`;
+  return `ACP (${provider.command ?? 'custom command'}${provider.args?.length ? ` ${provider.args.join(' ')}` : ''}${suffix ? `; ${suffix}` : ''})`;
 }
 
 export function sessionBelongsToProvider(sessionId: string | undefined, provider: ProviderConfig): boolean {

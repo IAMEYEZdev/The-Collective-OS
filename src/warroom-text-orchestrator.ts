@@ -11,7 +11,7 @@
  *      "should this agent chime in?" classifier.
  *   6. Emits turn_complete.
  *
- * Every agent turn uses `query()` from @anthropic-ai/claude-agent-sdk on
+ * Every agent turn uses the Agent Provider Engine's Claude SDK adapter on
  * the subscription OAuth path (same as Telegram and voice bridge). No API
  * key, no Gemini. Per-agent cwd via resolveAgentDir so externally configured
  * agents (under CLAUDECLAW_CONFIG/agents) work identically to repo-local ones.
@@ -25,7 +25,6 @@ import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
 
-import { query } from '@anthropic-ai/claude-agent-sdk';
 import { PROJECT_ROOT, CLAUDECLAW_CONFIG } from './config.js';
 import { readEnvFile } from './env.js';
 import { logger } from './logger.js';
@@ -67,6 +66,7 @@ import {
   type RouterContext,
   type RouterDecision,
 } from './warroom-text-router.js';
+import { EngineFactory } from './agent-engine/index.js';
 
 // ── Roster helpers ───────────────────────────────────────────────────
 
@@ -534,22 +534,23 @@ export async function warmupMeeting(): Promise<void> {
       // Tiny prompt, no tools, no settings sources, Haiku. This is the
       // same lightweight config the router uses, so on Hit 1 we warm the
       // exact code path that runs on every user turn.
-      for await (const ev of query({
-        prompt: singleTurn('say ok'),
-        options: {
-          model: 'claude-haiku-4-5-20251001',
-          allowedTools: [],
-          disallowedTools: ['*'],
-          settingSources: [],
-          maxTurns: 1,
-          permissionMode: 'bypassPermissions',
-          allowDangerouslySkipPermissions: true,
-          env: sdkEnvStripped(),
-          abortController: abort,
-        } as any,
+      const engine = EngineFactory.forProvider({ type: 'claude' });
+      for await (const ev of engine.invoke({
+        prompt: 'say ok',
+        provider: { type: 'claude' },
+        cwd: PROJECT_ROOT,
+        model: 'claude-haiku-4-5-20251001',
+        allowedTools: [],
+        disallowedTools: ['*'],
+        settingSources: [],
+        maxTurns: 1,
+        permissionMode: 'bypassPermissions',
+        allowDangerouslySkipPermissions: true,
+        env: sdkEnvStripped(),
+        abortController: abort,
       })) {
         // drain
-        if ((ev as any).type === 'result') break;
+        if (ev.type === 'result') break;
       }
       _warmupDone = true;
       logger.info('text War Room warmup complete');
@@ -580,7 +581,7 @@ export function isWarmupDone(): boolean {
 
 // ── Per-agent SDK warmup ─────────────────────────────────────────────
 // Each agent runs in its own Claude Agent SDK subprocess with its own
-// cwd, MCP allowlist, and CLAUDE.md. The first call to query() for a
+// cwd, MCP allowlist, and CLAUDE.md. The first engine call for a
 // given agent pays a real cold-start: subprocess spawn, settings
 // resolution, MCP load, system prompt build, prompt-cache miss against
 // Anthropic. Once warm (within ~5 min of last call), subsequent queries
@@ -616,27 +617,27 @@ export async function warmupAgentSDK(agentId: string): Promise<void> {
       const abort = new AbortController();
       const timer = setTimeout(() => abort.abort(), AGENT_WARMUP_TIMEOUT_MS);
       try {
-        for await (const ev of query({
-          prompt: singleTurn('ok'),
-          options: {
-            cwd: agentDir,
-            // Haiku for speed — we only need to spin up the SDK and warm
-            // the network path. The real turn uses the agent's actual
-            // model; Anthropic's prompt cache spans models for the same
-            // session less aggressively, but the subprocess + SDK +
-            // MCP boot is the dominant cost we're amortizing here.
-            model: 'claude-haiku-4-5-20251001',
-            allowedTools: [],
-            disallowedTools: ['*'],
-            settingSources: [],
-            maxTurns: 1,
-            permissionMode: 'bypassPermissions',
-            allowDangerouslySkipPermissions: true,
-            env: sdkEnvStripped(),
-            abortController: abort,
-          } as any,
+        const engine = EngineFactory.forProvider({ type: 'claude' });
+        for await (const ev of engine.invoke({
+          prompt: 'ok',
+          provider: { type: 'claude' },
+          cwd: agentDir,
+          // Haiku for speed — we only need to spin up the SDK and warm
+          // the network path. The real turn uses the agent's actual
+          // model; Anthropic's prompt cache spans models for the same
+          // session less aggressively, but the subprocess + SDK +
+          // MCP boot is the dominant cost we're amortizing here.
+          model: 'claude-haiku-4-5-20251001',
+          allowedTools: [],
+          disallowedTools: ['*'],
+          settingSources: [],
+          maxTurns: 1,
+          permissionMode: 'bypassPermissions',
+          allowDangerouslySkipPermissions: true,
+          env: sdkEnvStripped(),
+          abortController: abort,
         })) {
-          if ((ev as any).type === 'result') break;
+          if (ev.type === 'result') break;
         }
         _warmupAgentDone.add(agentId);
         logger.info({ agentId }, 'agent SDK warmed');
@@ -1565,49 +1566,49 @@ async function runAgentTurn(args: RunAgentTurnArgs): Promise<string> {
     // Caught below so we can emit a clean system_note instead of crashing
     // the orchestrator and leaving the bubble stuck.
     requireEnabled('LLM_SPAWN_ENABLED');
-    for await (const ev of query({
-      prompt: singleTurn(framedText),
-      options: {
-        cwd: agentDir,
-        resume: sessionId,
-        settingSources: ['project', 'user'],
-        // War-room runs with the SDK's default permission mode — no
-        // bypassPermissions, no allowDangerouslySkipPermissions. Combined
-        // with the per-agent tool policy below, every side-effect tool
-        // call now goes through the SDK's permission machinery.
-        permissionMode: 'default',
-        // Tool policy from warroom-tool-policy.ts. Read-only built-ins
-        // are always allowed; side-effect tools (Bash, Write, etc.) are
-        // opted-in per agent via agent.yaml `warroom_tools`. MCP servers
-        // are filtered to those the agent explicitly lists.
-        allowedTools: toolPolicy.allowedTools,
-        disallowedTools: toolPolicy.disallowedTools,
-        // Text War Room is a group chat, but specialists doing real
-        // multi-step work (load skill → plan → mkdir → write file → post
-        // → finalize) need ≥6 turns. The previous cap of 4 cut content
-        // off mid-skill on a real LinkedIn-post request and produced an
-        // empty bubble. Bump specialists to 8 and main to 10 so a normal
-        // skill flow can complete without being cliff-edged. Cost is
-        // bounded by the per-agent budget timer (45-75s) so a runaway
-        // tool loop still gets killed at the wall-clock layer.
-        maxTurns: agentId === 'main' ? 10 : 8,
-        env: sdkEnvStripped(),
-        ...(Object.keys(mcpServers).length ? { mcpServers } : {}),
-        includePartialMessages: true,
-        abortController: abortCtrl,
-        ...(agentModel ? { model: agentModel } : {}),
-      } as any,
+    const engine = EngineFactory.forProvider({ type: 'claude' });
+    for await (const ev of engine.invoke({
+      prompt: framedText,
+      provider: { type: 'claude' },
+      cwd: agentDir,
+      sessionId,
+      settingSources: ['project', 'user'],
+      // War-room runs with the SDK's default permission mode. Combined
+      // with the per-agent tool policy below, every side-effect tool call
+      // goes through the SDK's permission machinery.
+      permissionMode: 'default',
+      allowedTools: toolPolicy.allowedTools,
+      disallowedTools: toolPolicy.disallowedTools,
+      maxTurns: agentId === 'main' ? 10 : 8,
+      env: sdkEnvStripped(),
+      ...(Object.keys(mcpServers).length ? { mcpServers } : {}),
+      includePartialMessages: true,
+      abortController: abortCtrl,
+      ...(agentModel ? { model: agentModel } : {}),
     })) {
-      const e = ev as Record<string, unknown>;
-      if (e.type === 'system' && e.subtype === 'init') {
-        newSessionId = e.session_id as string | undefined;
+      if (ev.type === 'session') {
+        newSessionId = ev.sessionId;
+      }
+      if (ev.type === 'text_delta') {
+        fullText += ev.delta;
+        channel.emit({ type: 'agent_chunk', turnId, agentId, role, delta: ev.delta });
+      }
+      const e = ev.raw as Record<string, unknown> | undefined;
+      if (!e) {
+        if (ev.type === 'result') {
+          if (typeof ev.text === 'string' && ev.text.length > fullText.length) fullText = ev.text;
+          stopReason = ev.stopReason;
+          gotResult = true;
+        }
+        if (cancelFlag.cancelled) break;
+        continue;
       }
       if (e.type === 'stream_event') {
         const inner = e.event as Record<string, unknown> | undefined;
         if (inner?.type === 'content_block_delta') {
           const delta = inner.delta as Record<string, unknown> | undefined;
           const text = typeof delta?.text === 'string' ? (delta.text as string) : '';
-          if (text) {
+          if (text && ev.type !== 'text_delta') {
             fullText += text;
             channel.emit({ type: 'agent_chunk', turnId, agentId, role, delta: text });
           }
@@ -1984,20 +1985,6 @@ function normalizeForIngestion(userText: string): string {
 
 // ── Utilities shared with voice bridge pattern ───────────────────────
 
-async function* singleTurn(text: string): AsyncGenerator<{
-  type: 'user';
-  message: { role: 'user'; content: string };
-  parent_tool_use_id: null;
-  session_id: string;
-}> {
-  yield {
-    type: 'user',
-    message: { role: 'user', content: text },
-    parent_tool_use_id: null,
-    session_id: '',
-  };
-}
-
 function sdkEnvStripped(): Record<string, string | undefined> {
   // Delegate to the shared scrubber in security.ts so every SDK entry
   // point in the codebase strips the same set of secret-shaped vars.
@@ -2044,4 +2031,3 @@ export function maybeLogWarRoomToHive(
   logFn(agentId, meetingChatId, action, summary);
   return { logged: true, action, summary };
 }
-

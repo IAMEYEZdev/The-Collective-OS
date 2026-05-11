@@ -104,6 +104,7 @@ import {
 } from './agent-create.js';
 import {
   DEFAULT_CLAUDE_MODEL,
+  DEFAULT_CODEX_MODEL,
   ProviderConfig,
   getProviderDisplay,
   getMainProviderConfig,
@@ -132,6 +133,7 @@ import { WARROOM_ENABLED, WARROOM_PORT } from './config.js';
 import { logger } from './logger.js';
 import { getTelegramConnected, getBotInfo, chatEvents, getIsProcessing, abortActiveQuery, ChatEvent } from './state.js';
 import { killProcess, isProcessAlive, findProcessesByPattern } from './platform.js';
+import { inspectAcpProviderRuntimeOptions, type AcpProviderRuntimeOptions } from './agent-engine/acp-adapter.js';
 
 const CLAUDE_MODEL_OPTIONS = [
   { id: 'claude-opus-4-6', label: 'Opus 4.6' },
@@ -139,6 +141,78 @@ const CLAUDE_MODEL_OPTIONS = [
   { id: 'claude-sonnet-4-5', label: 'Sonnet 4.5' },
   { id: 'claude-haiku-4-5', label: 'Haiku 4.5' },
 ];
+
+const GEMINI_MODEL_OPTIONS = [
+  { id: 'gemini-3.1-pro', label: 'Gemini 3.1 Pro' },
+  { id: 'gemini-3-flash', label: 'Gemini 3 Flash' },
+  { id: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
+  { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
+];
+
+const CODEX_MODEL_OPTIONS = [
+  { id: DEFAULT_CODEX_MODEL, label: 'GPT-5.5' },
+  { id: 'gpt-5.4', label: 'GPT-5.4' },
+  { id: 'gpt-5.4-mini', label: 'GPT-5.4 Mini' },
+  { id: 'gpt-5.3-codex', label: 'GPT-5.3 Codex' },
+  { id: 'gpt-5.3-codex-spark', label: 'GPT-5.3 Codex Spark' },
+  { id: 'gpt-5.2', label: 'GPT-5.2' },
+];
+
+const CUSTOM_ACP_MODEL_OPTIONS = [
+  { id: 'provider-default', label: 'Provider default' },
+];
+
+const CLAUDE_RUNTIME_OPTIONS = [
+  { id: 'fast', label: 'Low / fast' },
+  { id: 'normal', label: 'Medium / normal' },
+  { id: 'deep', label: 'High / deep' },
+  { id: 'max', label: 'Max' },
+];
+
+const CLAUDE_THINKING_OPTIONS = [
+  { id: 'auto', label: 'Auto' },
+  { id: 'off', label: 'Off' },
+  { id: 'on', label: 'On' },
+];
+
+const CODEX_THINKING_FALLBACK_OPTIONS = [
+  { id: 'low', label: 'Low' },
+  { id: 'medium', label: 'Medium' },
+  { id: 'high', label: 'High' },
+  { id: 'xhigh', label: 'Extra high' },
+];
+
+function fallbackRuntimeOptions(provider: ProviderConfig): AcpProviderRuntimeOptions {
+  if (provider.type === 'codex') {
+    return {
+      provider: provider.type,
+      modeOptions: [],
+      thinkingOptions: CODEX_THINKING_FALLBACK_OPTIONS,
+      rawConfigOptions: [],
+      source: 'fallback',
+    };
+  }
+  return {
+    provider: provider.type,
+    modeOptions: [],
+    thinkingOptions: [
+      { id: 'auto', label: 'Auto' },
+      { id: 'off', label: 'Off' },
+      { id: 'on', label: 'On' },
+    ],
+    rawConfigOptions: [],
+    source: 'fallback',
+  };
+}
+
+function parseProviderArgsQuery(value: string | undefined): string[] | undefined {
+  if (!value?.trim()) return undefined;
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (Array.isArray(parsed)) return parsed.filter((item): item is string => typeof item === 'string');
+  } catch { /* fall through to shell-ish split */ }
+  return value.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g)?.map((part) => part.replace(/^["']|["']$/g, '')) ?? [];
+}
 
 function stripAnsi(s: string): string {
   return s.replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, '');
@@ -173,12 +247,12 @@ function getProviderStatus() {
   const model = provider.type === 'claude'
     ? (getMainModelOverride() ?? provider.model ?? agentDefaultModel ?? DEFAULT_CLAUDE_MODEL)
     : provider.type === 'opencode'
-      ? (getOpenCodeDefaultModel() ?? 'OpenCode default')
+      ? (provider.model ?? getOpenCodeDefaultModel() ?? 'OpenCode default')
       : provider.type === 'gemini'
-        ? 'Gemini CLI default'
+        ? (provider.model ?? 'Gemini CLI default')
         : provider.type === 'codex'
-          ? 'Codex adapter default'
-      : (provider.command ? `${provider.command}${provider.args?.length ? ` ${provider.args.join(' ')}` : ''}` : 'Provider default');
+          ? (provider.model ?? DEFAULT_CODEX_MODEL)
+      : (provider.model ?? (provider.command ? `${provider.command}${provider.args?.length ? ` ${provider.args.join(' ')}` : ''}` : 'Provider default'));
 
   return {
     provider,
@@ -2014,7 +2088,7 @@ export function buildDashboardApp(botApi?: Api<RawApi>): Hono {
         const provider = id === 'main' ? getMainProviderConfig() : config.provider;
         const model = provider.type === 'claude'
           ? (mainOverride ?? provider.model ?? config.model ?? DEFAULT_CLAUDE_MODEL)
-          : undefined;
+          : provider.model;
         return {
           id,
           name: config.name,
@@ -2050,7 +2124,7 @@ export function buildDashboardApp(botApi?: Api<RawApi>): Hono {
         id: 'main',
         name: 'Main',
         description: getMainDescription(),
-        model: mainProvider.type === 'claude' ? (getMainModelOverride() ?? mainProvider.model ?? DEFAULT_CLAUDE_MODEL) : undefined,
+        model: getProviderStatus().model,
         provider: mainProvider,
         running: mainRunning,
         todayTurns: mainStats.todayTurns,
@@ -2146,49 +2220,106 @@ export function buildDashboardApp(botApi?: Api<RawApi>): Hono {
 
   app.get('/api/providers/models', (c) => {
     const provider = (c.req.query('provider') || '').toLowerCase();
+    const current = getMainProviderConfig();
     if (provider === 'claude') {
-      return c.json({ provider, models: CLAUDE_MODEL_OPTIONS, defaultModel: DEFAULT_CLAUDE_MODEL, selectable: true });
+      return c.json({
+        provider,
+        models: CLAUDE_MODEL_OPTIONS,
+        defaultModel: current.type === 'claude' ? (current.model ?? DEFAULT_CLAUDE_MODEL) : DEFAULT_CLAUDE_MODEL,
+        selectable: true,
+        allowCustom: true,
+      });
     }
     if (provider === 'opencode') {
       const models = getOpenCodeModels();
       const configuredModel = getOpenCodeDefaultModel();
+      const currentModel = current.type === 'opencode' ? current.model : undefined;
       return c.json({
         provider,
         models: models.length ? models : [{ id: 'opencode-default', label: 'OpenCode default' }],
-        defaultModel: configuredModel && models.some((m) => m.id === configuredModel)
+        defaultModel: currentModel ?? (configuredModel && models.some((m) => m.id === configuredModel)
           ? configuredModel
-          : models[0]?.id ?? configuredModel ?? 'opencode-default',
+          : models[0]?.id ?? configuredModel ?? 'opencode-default'),
         selectable: models.length > 0,
-        note: 'OpenCode model selection uses the OpenCode config for runtime execution.',
+        allowCustom: true,
+        note: 'OpenCode model selection is sent through ACP session/set_model when the provider supports it.',
       });
     }
     if (provider === 'gemini') {
       return c.json({
         provider,
-        models: [{ id: 'gemini-default', label: 'Gemini CLI default' }],
-        defaultModel: 'gemini-default',
-        selectable: false,
-        note: 'Gemini model selection is managed by Gemini CLI.',
+        models: GEMINI_MODEL_OPTIONS,
+        defaultModel: current.type === 'gemini' ? (current.model ?? GEMINI_MODEL_OPTIONS[0].id) : GEMINI_MODEL_OPTIONS[0].id,
+        selectable: true,
+        allowCustom: true,
+        note: 'Gemini model selection is sent through ACP session/set_model when supported.',
       });
     }
     if (provider === 'codex') {
       return c.json({
         provider,
-        models: [{ id: 'codex-default', label: 'Codex adapter default' }],
-        defaultModel: 'codex-default',
-        selectable: false,
-        note: 'Codex ACP support uses the codex-acp adapter. Install and authenticate Codex separately.',
+        models: CODEX_MODEL_OPTIONS,
+        defaultModel: current.type === 'codex' ? (current.model ?? DEFAULT_CODEX_MODEL) : DEFAULT_CODEX_MODEL,
+        selectable: true,
+        allowCustom: true,
+        note: 'Codex model selection is sent through the codex-acp adapter via ACP session/set_model when supported.',
       });
     }
     if (provider === 'acp') {
       return c.json({
         provider,
-        models: [{ id: 'provider-default', label: 'Provider default' }],
-        defaultModel: 'provider-default',
-        selectable: false,
+        models: CUSTOM_ACP_MODEL_OPTIONS,
+        defaultModel: current.type === 'acp' ? (current.model ?? 'provider-default') : 'provider-default',
+        selectable: true,
+        allowCustom: true,
+        note: 'Custom ACP model ids are provider-specific. Use provider-default to skip session/set_model.',
       });
     }
     return c.json({ error: 'Invalid provider' }, 400);
+  });
+
+  app.get('/api/providers/runtime-options', async (c) => {
+    const providerType = (c.req.query('provider') || '').toLowerCase();
+    const current = getMainProviderConfig();
+    const hasCommandOverride = c.req.query('command') !== undefined || c.req.query('args') !== undefined;
+    const base: ProviderConfig = providerType === current.type && !hasCommandOverride
+      ? current
+      : normalizeProviderConfig({
+        type: providerType,
+        command: c.req.query('command'),
+        args: parseProviderArgsQuery(c.req.query('args')),
+      });
+
+    if (base.type === 'claude') {
+      return c.json({
+        provider: base.type,
+        modeOptions: CLAUDE_RUNTIME_OPTIONS,
+        thinkingOptions: CLAUDE_THINKING_OPTIONS,
+        rawConfigOptions: [],
+        source: 'static',
+      });
+    }
+    if (base.type !== 'opencode' && base.type !== 'gemini' && base.type !== 'codex' && base.type !== 'acp') {
+      return c.json({ error: 'Invalid provider' }, 400);
+    }
+    if (base.type === 'acp' && !base.command?.trim()) {
+      return c.json({ ...fallbackRuntimeOptions(base), error: 'Custom ACP provider requires a command' });
+    }
+
+    try {
+      const inspected = await inspectAcpProviderRuntimeOptions(base, PROJECT_ROOT, 5000);
+      if (inspected.modeOptions.length || inspected.thinkingOptions.length) return c.json(inspected);
+      return c.json({
+        ...fallbackRuntimeOptions(base),
+        error: 'Provider did not advertise runtime options',
+      });
+    } catch (err) {
+      const fallback = fallbackRuntimeOptions(base);
+      return c.json({
+        ...fallback,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   });
 
   app.patch('/api/agents/:id/provider', async (c) => {

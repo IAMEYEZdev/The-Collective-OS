@@ -469,21 +469,23 @@ describe('PATCH /api/agents/:id/model', () => {
 });
 
 describe('provider selection endpoints', () => {
-  it('reports Gemini and Codex as non-selectable model providers', async () => {
+  it('reports selectable Gemini and Codex model providers', async () => {
     const geminiRes = await get('/api/providers/models?provider=gemini');
     expect(geminiRes.status).toBe(200);
     expect(await jsonOf(geminiRes)).toMatchObject({
       provider: 'gemini',
-      defaultModel: 'gemini-default',
-      selectable: false,
+      defaultModel: expect.any(String),
+      selectable: true,
+      allowCustom: true,
     });
 
     const codexRes = await get('/api/providers/models?provider=codex');
     expect(codexRes.status).toBe(200);
     expect(await jsonOf(codexRes)).toMatchObject({
       provider: 'codex',
-      defaultModel: 'codex-default',
-      selectable: false,
+      defaultModel: expect.any(String),
+      selectable: true,
+      allowCustom: true,
     });
   });
 
@@ -499,6 +501,32 @@ describe('provider selection endpoints', () => {
       agent: 'main',
       provider: { type: 'gemini' },
       restartRequired: false,
+    });
+  });
+
+  it('updates main provider with a selected model without restart', async () => {
+    const res = await app.request('/api/agents/main/provider' + Q, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ provider: { type: 'codex', model: 'gpt-5.3-codex' } }),
+    });
+    expect(res.status).toBe(200);
+    expect(await jsonOf(res)).toMatchObject({
+      ok: true,
+      agent: 'main',
+      provider: { type: 'codex', model: 'gpt-5.3-codex' },
+      restartRequired: false,
+    });
+  });
+
+  it('reports provider-specific runtime options', async () => {
+    const claudeRes = await get('/api/providers/runtime-options?provider=claude');
+    expect(claudeRes.status).toBe(200);
+    expect(await jsonOf(claudeRes)).toMatchObject({
+      provider: 'claude',
+      source: 'static',
+      modeOptions: expect.arrayContaining([expect.objectContaining({ id: 'max' })]),
+      thinkingOptions: expect.arrayContaining([expect.objectContaining({ id: 'auto' })]),
     });
   });
 

@@ -1,18 +1,19 @@
 import fs from 'fs';
 import path from 'path';
 
-import { query } from '@anthropic-ai/claude-agent-sdk';
-
 import { AGENT_MAX_TURNS, PROJECT_ROOT, agentCwd } from './config.js';
-import { runAcpAgent } from './acp-runner.js';
 import { readEnvFile } from './env.js';
 import { classifyError, AgentError } from './errors.js';
 import { logger } from './logger.js';
 import { getScrubbedSdkEnv } from './security.js';
 import { requireEnabled } from './kill-switches.js';
+import { EngineFactory } from './agent-engine/index.js';
 import {
   DEFAULT_CLAUDE_MODEL,
+  DEFAULT_CODEX_MODEL,
   ProviderConfig,
+  ProviderRuntimeMode,
+  ProviderThinkingMode,
   decodeProviderSession,
   encodeProviderSession,
   getMainProviderConfig,
@@ -118,31 +119,6 @@ export interface AgentProgressEvent {
   planEntries?: Array<{ content: string; status: string; priority?: string }>;
 }
 
-/** Map SDK tool names to human-readable labels. */
-const TOOL_LABELS: Record<string, string> = {
-  Read: 'Reading file',
-  Write: 'Writing file',
-  Edit: 'Editing file',
-  Bash: 'Running command',
-  Grep: 'Searching code',
-  Glob: 'Finding files',
-  WebSearch: 'Web search',
-  WebFetch: 'Fetching page',
-  Agent: 'Sub-agent',
-  NotebookEdit: 'Editing notebook',
-  AskUserQuestion: 'User question',
-};
-
-function toolLabel(toolName: string): string {
-  if (TOOL_LABELS[toolName]) return TOOL_LABELS[toolName];
-  // MCP tools: mcp__server__tool → "server: tool"
-  if (toolName.startsWith('mcp__')) {
-    const parts = toolName.split('__');
-    return parts.length >= 3 ? `${parts[1]}: ${parts.slice(2).join(' ')}` : toolName;
-  }
-  return toolName;
-}
-
 export interface AgentResult {
   text: string | null;
   newSessionId: string | undefined;
@@ -150,24 +126,23 @@ export interface AgentResult {
   aborted?: boolean;
 }
 
-/**
- * A minimal AsyncIterable that yields a single user message then closes.
- * This is the format the Claude Agent SDK expects for its `prompt` parameter.
- * The SDK drives the agentic loop internally (tool use, multi-step reasoning)
- * and surfaces a final `result` event when done.
- */
-async function* singleTurn(text: string): AsyncGenerator<{
-  type: 'user';
-  message: { role: 'user'; content: string };
-  parent_tool_use_id: null;
-  session_id: string;
-}> {
-  yield {
-    type: 'user',
-    message: { role: 'user', content: text },
-    parent_tool_use_id: null,
-    session_id: '',
-  };
+function effortForMode(mode: ProviderRuntimeMode | undefined): 'low' | 'medium' | 'high' | 'max' | undefined {
+  const normalized = mode?.toLowerCase().replace(/[\s-]+/g, '_');
+  if (normalized === 'fast' || normalized === 'low') return 'low';
+  if (normalized === 'normal' || normalized === 'medium' || normalized === 'balanced') return 'medium';
+  if (normalized === 'deep' || normalized === 'high') return 'high';
+  if (normalized === 'max' || normalized === 'extra_high' || normalized === 'xhigh') return 'max';
+  return undefined;
+}
+
+function thinkingForMode(
+  mode: ProviderThinkingMode | undefined,
+): { type: 'adaptive' } | { type: 'enabled'; budgetTokens?: number } | { type: 'disabled' } | undefined {
+  const normalized = mode?.toLowerCase().replace(/[\s-]+/g, '_');
+  if (normalized === 'off' || normalized === 'disabled') return { type: 'disabled' };
+  if (normalized === 'on' || normalized === 'enabled') return { type: 'enabled', budgetTokens: 16000 };
+  if (normalized === 'auto' || normalized === 'adaptive' || normalized === 'default') return { type: 'adaptive' };
+  return undefined;
 }
 
 /**
@@ -210,37 +185,15 @@ export async function runAgent(
     ? decodeProviderSession(provider, sessionId)
     : undefined;
 
-  if (provider.type === 'opencode' || provider.type === 'acp' || provider.type === 'gemini' || provider.type === 'codex') {
-    const typingInterval = setInterval(onTyping, 4000);
-    try {
-      const result = await runAcpAgent(
-        provider,
-        message,
-        providerSessionId,
-        onProgress,
-        abortController,
-        onStreamText,
-      );
-      return {
-        ...result,
-        newSessionId: encodeProviderSession(provider, result.newSessionId),
-      };
-    } catch (err) {
-      if (abortController?.signal.aborted) {
-        return { text: null, newSessionId: encodeProviderSession(provider, providerSessionId), usage: null, aborted: true };
-      }
-      const classified = classifyError(err);
-      logger.error(
-        { category: classified.category, recovery: classified.recovery, originalMsg: (err as Error)?.message },
-        'ACP agent query failed (classified)',
-      );
-      throw classified;
-    } finally {
-      clearInterval(typingInterval);
-    }
-  }
-
-  const claudeModel = model ?? provider.model ?? DEFAULT_CLAUDE_MODEL;
+  const effectiveModel = model
+    ?? provider.model
+    ?? (provider.type === 'claude'
+      ? DEFAULT_CLAUDE_MODEL
+      : provider.type === 'codex'
+        ? DEFAULT_CODEX_MODEL
+        : undefined);
+  const effectiveEffort = effortForMode(provider.runtimeMode);
+  const effectiveThinking = thinkingForMode(provider.thinkingMode);
   // Read secrets from .env without polluting process.env.
   // CLAUDE_CODE_OAUTH_TOKEN is optional — the subprocess finds auth via ~/.claude/
   // automatically. Only needed if you want to override which account is used.
@@ -258,7 +211,6 @@ export async function runAgent(
   let preCompactTokens: number | null = null;
   let lastCallCacheRead = 0;
   let lastCallInputTokens = 0;
-  let streamedText = '';
 
   // Refresh typing indicator on an interval while Claude works.
   // Telegram's "typing..." action expires after ~5s.
@@ -273,139 +225,67 @@ export async function runAgent(
       'Starting agent query',
     );
 
-    // SDK Options.mcpServers expects Record<string, McpServerConfig>
-    const mcpServerSpecs = mcpServerNames.length > 0 ? mcpServers : undefined;
-
-    for await (const event of query({
-      prompt: singleTurn(message),
-      options: {
-        // cwd = agent directory (if running as agent) or project root.
-        // Claude Code loads CLAUDE.md from cwd via settingSources: ['project'].
-        cwd: agentCwd ?? PROJECT_ROOT,
-
-        // Resume the previous session for this chat (persistent context)
-        resume: providerSessionId,
-
-        // 'project' loads CLAUDE.md from cwd; 'user' loads ~/.claude/skills/ and user settings
-        settingSources: ['project', 'user'],
-
-        // Skip all permission prompts — this is a trusted personal bot on your own machine
-        permissionMode: 'bypassPermissions',
-        allowDangerouslySkipPermissions: true,
-
-        // Cap agentic turns to prevent runaway tool-use loops (e.g. retrying
-        // stale cookies 40+ times). Configurable via AGENT_MAX_TURNS in .env.
-        ...(AGENT_MAX_TURNS > 0 ? { maxTurns: AGENT_MAX_TURNS } : {}),
-
-        // Pass secrets to the subprocess without polluting our own process.env
-        env: sdkEnv,
-
-        // MCP servers loaded from .claude/settings.json and ~/.claude/settings.json
-        ...(mcpServerSpecs ? { mcpServers: mcpServerSpecs } : {}),
-
-        // Stream partial text so Telegram can show progressive updates
-        includePartialMessages: !!onStreamText,
-
-        // Model override (e.g. 'claude-haiku-4-5', 'claude-sonnet-4-5')
-        ...(claudeModel ? { model: claudeModel } : {}),
-
-        // Abort support — signals the SDK to kill the subprocess
-        ...(abortController ? { abortController } : {}),
-      },
+    const engine = EngineFactory.forProvider(provider);
+    for await (const event of engine.invoke({
+      prompt: message,
+      provider,
+      sessionId: providerSessionId,
+      cwd: agentCwd ?? PROJECT_ROOT,
+      settingSources: ['project', 'user'],
+      permissionMode: 'bypassPermissions',
+      allowDangerouslySkipPermissions: true,
+      ...(AGENT_MAX_TURNS > 0 ? { maxTurns: AGENT_MAX_TURNS } : {}),
+      env: sdkEnv,
+      ...(mcpServerNames.length > 0 ? { mcpServers } : {}),
+      includePartialMessages: !!onStreamText,
+      ...(effectiveModel ? { model: effectiveModel } : {}),
+      ...(provider.runtimeMode ? { runtimeMode: provider.runtimeMode } : {}),
+      ...(provider.thinkingMode ? { thinkingMode: provider.thinkingMode } : {}),
+      ...(effectiveEffort ? { effort: effectiveEffort } : {}),
+      ...(effectiveThinking ? { thinking: effectiveThinking } : {}),
+      abortController,
     })) {
-      const ev = event as Record<string, unknown>;
-
-      if (ev['type'] === 'system' && ev['subtype'] === 'init') {
-        newSessionId = ev['session_id'] as string;
+      if (event.type === 'session') {
+        newSessionId = event.sessionId;
         logger.info({ newSessionId }, 'Session initialized');
       }
 
-      // Detect auto-compaction (context window was getting full)
-      if (ev['type'] === 'system' && ev['subtype'] === 'compact_boundary') {
+      if (event.type === 'compact') {
         didCompact = true;
-        const meta = ev['compact_metadata'] as { trigger: string; pre_tokens: number } | undefined;
-        preCompactTokens = meta?.pre_tokens ?? null;
+        preCompactTokens = event.preCompactTokens;
         logger.warn(
-          { trigger: meta?.trigger, preCompactTokens },
+          { trigger: event.trigger, preCompactTokens },
           'Context window compacted',
         );
       }
 
-      // Track per-call token usage and detect tool use from assistant message events.
-      // Each assistant message represents one API call; its usage reflects
-      // that single call's context size (not cumulative across the turn).
-      if (ev['type'] === 'assistant') {
-        const msg = ev['message'] as Record<string, unknown> | undefined;
-        const msgUsage = msg?.['usage'] as Record<string, number> | undefined;
-        const callCacheRead = msgUsage?.['cache_read_input_tokens'] ?? 0;
-        const callInputTokens = msgUsage?.['input_tokens'] ?? 0;
-        if (callCacheRead > 0) {
-          lastCallCacheRead = callCacheRead;
-        }
-        if (callInputTokens > 0) {
-          lastCallInputTokens = callInputTokens;
-        }
-
-        // Extract tool_use blocks from assistant content for progress reporting
-        if (onProgress) {
-          const content = msg?.['content'] as Array<{ type: string; name?: string }> | undefined;
-          if (Array.isArray(content)) {
-            for (const block of content) {
-              if (block.type === 'tool_use' && block.name) {
-                onProgress({ type: 'tool_active', description: toolLabel(block.name) });
-              }
-            }
-          }
-        }
+      if (event.type === 'progress') {
+        onProgress?.(event.progress);
       }
 
-      // Sub-agent lifecycle events — surface to Telegram for user feedback
-      if (ev['type'] === 'system' && ev['subtype'] === 'task_started' && onProgress) {
-        const desc = (ev['description'] as string) ?? 'Sub-agent started';
-        onProgress({ type: 'task_started', description: desc });
-      }
-      if (ev['type'] === 'system' && ev['subtype'] === 'task_notification' && onProgress) {
-        const summary = (ev['summary'] as string) ?? 'Sub-agent finished';
-        const status = (ev['status'] as string) ?? 'completed';
-        onProgress({
-          type: 'task_completed',
-          description: status === 'failed' ? `Failed: ${summary}` : summary,
-        });
+      if (event.type === 'text_delta') {
+        onStreamText?.(event.accumulatedText);
       }
 
-      // Stream text deltas for progressive Telegram updates.
-      // Only stream the outermost assistant response (parent_tool_use_id === null)
-      // to avoid showing internal tool-use reasoning.
-      if (ev['type'] === 'stream_event' && onStreamText && ev['parent_tool_use_id'] === null) {
-        const streamEvent = ev['event'] as Record<string, unknown> | undefined;
-        if (streamEvent?.['type'] === 'content_block_delta') {
-          const delta = streamEvent['delta'] as Record<string, unknown> | undefined;
-          if (delta?.['type'] === 'text_delta' && typeof delta['text'] === 'string') {
-            streamedText += delta['text'];
-            onStreamText(streamedText);
-          }
-        }
-        if (streamEvent?.['type'] === 'message_start') {
-          streamedText = '';
-        }
+      if (event.type === 'usage') {
+        usage = event.usage;
+        lastCallCacheRead = usage.lastCallCacheRead;
+        lastCallInputTokens = usage.lastCallInputTokens;
       }
 
-      if (ev['type'] === 'result') {
-        resultText = (ev['result'] as string | null | undefined) ?? null;
+      if (event.type === 'aborted') {
+        return {
+          text: event.text,
+          newSessionId: encodeProviderSession(provider, event.sessionId ?? newSessionId ?? providerSessionId),
+          usage: event.usage,
+          aborted: true,
+        };
+      }
 
-        // Extract usage info from result event
-        const evUsage = ev['usage'] as Record<string, number> | undefined;
-        if (evUsage) {
-          usage = {
-            inputTokens: evUsage['input_tokens'] ?? 0,
-            outputTokens: evUsage['output_tokens'] ?? 0,
-            cacheReadInputTokens: evUsage['cache_read_input_tokens'] ?? 0,
-            totalCostUsd: (ev['total_cost_usd'] as number) ?? 0,
-            didCompact,
-            preCompactTokens,
-            lastCallCacheRead,
-            lastCallInputTokens,
-          };
+      if (event.type === 'result') {
+        resultText = event.text;
+        if (event.usage) {
+          usage = event.usage;
           logger.info(
             {
               inputTokens: usage.inputTokens,
@@ -420,7 +300,7 @@ export async function runAgent(
         }
 
         logger.info(
-          { hasResult: !!resultText, subtype: ev['subtype'] },
+          { hasResult: !!resultText, subtype: event.stopReason },
           'Agent result received',
         );
       }
