@@ -23,6 +23,13 @@ import { loadMcpServers } from './agent.js';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { EngineFactory } from './agent-engine/index.js';
+import { defaultModelForProvider } from './active-provider.js';
+import {
+  decodeProviderSession,
+  encodeProviderSession,
+  getMainProviderConfig,
+  sessionBelongsToProvider,
+} from './provider.js';
 
 // The voice bridge is a standalone subprocess — initialize the DB
 // connection before any getSession/setSession calls run. Without this,
@@ -117,6 +124,10 @@ async function main() {
 
     // Resume session if one exists for this chat+agent
     const sessionId = getSession(chatId, agentId) ?? undefined;
+    const provider = getMainProviderConfig();
+    const providerSessionId = sessionBelongsToProvider(sessionId, provider)
+      ? decodeProviderSession(provider, sessionId)
+      : undefined;
 
     // Build memory context
     const { contextText: memCtx } = await buildMemoryContext(chatId, message, agentId);
@@ -138,12 +149,12 @@ async function main() {
     let newSessionId: string | undefined;
     let usage: Record<string, number> = {};
 
-    const engine = EngineFactory.forProvider({ type: 'claude' });
+    const engine = EngineFactory.forProvider(provider);
     for await (const event of engine.invoke({
       prompt: fullMessage,
-      provider: { type: 'claude' },
+      provider,
       cwd: agentDir,
-      sessionId,
+      sessionId: providerSessionId,
       settingSources: ['project', 'user'],
       permissionMode: 'bypassPermissions',
       allowDangerouslySkipPermissions: true,
@@ -153,6 +164,7 @@ async function main() {
       maxTurns: quickMode ? 3 : 15,
       env: sdkEnv,
       ...(mcpServerNames.length > 0 ? { mcpServers } : {}),
+      ...(defaultModelForProvider(provider) ? { model: defaultModelForProvider(provider) } : {}),
     })) {
       if (event.type === 'session') newSessionId = event.sessionId;
 
@@ -170,7 +182,7 @@ async function main() {
 
     // Save session for continuity
     if (newSessionId) {
-      setSession(chatId, newSessionId, agentId);
+      setSession(chatId, encodeProviderSession(provider, newSessionId) ?? newSessionId, agentId);
     }
 
     console.log(JSON.stringify({

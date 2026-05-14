@@ -211,11 +211,10 @@ export function audit(entry: AuditEntry): void {
 
 // ── SDK subprocess env scrubbing ─────────────────────────────────────
 //
-// Every Claude Agent SDK call spawns a `claude` subprocess that inherits
-// our env. By default that means `DASHBOARD_TOKEN`, `DB_ENCRYPTION_KEY`,
-// `DAILY_API_KEY`, third-party API keys, etc. are visible to the model
-// and to whatever tools it runs. A prompt-injected agent can read them
-// trivially.
+// Every agent engine subprocess inherits our env unless we override it.
+// By default that means `DASHBOARD_TOKEN`, `DB_ENCRYPTION_KEY`,
+// `DAILY_API_KEY`, third-party API keys, etc. are visible to the model and
+// to whatever tools it runs. A prompt-injected agent can read them trivially.
 //
 // `getScrubbedSdkEnv` returns the env to pass to `query({ env, ... })`:
 //   - Drops nested Claude-Code-session state so the child SDK process

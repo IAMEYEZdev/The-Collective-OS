@@ -11,10 +11,9 @@
  *      "should this agent chime in?" classifier.
  *   6. Emits turn_complete.
  *
- * Every agent turn uses the Agent Provider Engine's Claude SDK adapter on
- * the subscription OAuth path (same as Telegram and voice bridge). No API
- * key, no Gemini. Per-agent cwd via resolveAgentDir so externally configured
- * agents (under CLAUDECLAW_CONFIG/agents) work identically to repo-local ones.
+ * Every agent turn uses the user's selected provider. Per-agent cwd via
+ * resolveAgentDir so externally configured agents (under CLAUDECLAW_CONFIG/
+ * agents) work identically to repo-local ones.
  *
  * Callers should wrap handleTextTurn in messageQueue.enqueue("warroom-text:" +
  * meetingId, …) so concurrent sends for the same meeting serialize instead
@@ -67,6 +66,12 @@ import {
   type RouterDecision,
 } from './warroom-text-router.js';
 import { EngineFactory } from './agent-engine/index.js';
+import { defaultModelForProvider, getSelectedProviderConfig } from './active-provider.js';
+import {
+  decodeProviderSession,
+  encodeProviderSession,
+  sessionBelongsToProvider,
+} from './provider.js';
 
 // ── Roster helpers ───────────────────────────────────────────────────
 
@@ -511,9 +516,9 @@ export async function handleTextTurn(
 }
 
 /**
- * Warm up the Claude Agent SDK path so the first real user turn feels
+ * Warm up the selected provider path so the first real user turn feels
  * faster. Fires a locked-down maxTurns=1 query with no tools — the first
- * invocation pays the Node module cache cost + any one-time SDK init.
+ * invocation pays provider startup and any one-time engine init.
  * Subsequent queries in the same Node process skip that overhead.
  *
  * Meant to be called when the user lands on the text War Room page, in
@@ -531,15 +536,16 @@ export async function warmupMeeting(): Promise<void> {
     const abort = new AbortController();
     const timer = setTimeout(() => abort.abort(), 10_000);
     try {
-      // Tiny prompt, no tools, no settings sources, Haiku. This is the
-      // same lightweight config the router uses, so on Hit 1 we warm the
-      // exact code path that runs on every user turn.
-      const engine = EngineFactory.forProvider({ type: 'claude' });
+      // Tiny prompt, no tools, no settings sources. This is the same
+      // lightweight config the router uses, so on Hit 1 we warm the exact
+      // provider path that runs on every user turn.
+      const provider = getSelectedProviderConfig();
+      const engine = EngineFactory.forProvider(provider);
       for await (const ev of engine.invoke({
         prompt: 'say ok',
-        provider: { type: 'claude' },
+        provider,
         cwd: PROJECT_ROOT,
-        model: 'claude-haiku-4-5-20251001',
+        model: defaultModelForProvider(provider, 'claude-haiku-4-5-20251001'),
         allowedTools: [],
         disallowedTools: ['*'],
         settingSources: [],
@@ -580,12 +586,11 @@ export function isWarmupDone(): boolean {
 }
 
 // ── Per-agent SDK warmup ─────────────────────────────────────────────
-// Each agent runs in its own Claude Agent SDK subprocess with its own
+// Each agent runs in its own selected-provider subprocess with its own
 // cwd, MCP allowlist, and CLAUDE.md. The first engine call for a
 // given agent pays a real cold-start: subprocess spawn, settings
-// resolution, MCP load, system prompt build, prompt-cache miss against
-// Anthropic. Once warm (within ~5 min of last call), subsequent queries
-// are dramatically faster.
+// resolution, MCP load, and system prompt build. Once warm (within ~5 min
+// of last call), subsequent queries are dramatically faster.
 //
 // Slash commands /standup and /discuss run 5 agents back-to-back. Without
 // pre-warming, agents 2–5 each pay sequential cold start, easily blowing
@@ -617,17 +622,16 @@ export async function warmupAgentSDK(agentId: string): Promise<void> {
       const abort = new AbortController();
       const timer = setTimeout(() => abort.abort(), AGENT_WARMUP_TIMEOUT_MS);
       try {
-        const engine = EngineFactory.forProvider({ type: 'claude' });
+        const provider = getSelectedProviderConfig();
+        const engine = EngineFactory.forProvider(provider);
         for await (const ev of engine.invoke({
           prompt: 'ok',
-          provider: { type: 'claude' },
+          provider,
           cwd: agentDir,
-          // Haiku for speed — we only need to spin up the SDK and warm
-          // the network path. The real turn uses the agent's actual
-          // model; Anthropic's prompt cache spans models for the same
-          // session less aggressively, but the subprocess + SDK +
-          // MCP boot is the dominant cost we're amortizing here.
-          model: 'claude-haiku-4-5-20251001',
+          // Lightweight model for speed when Claude is selected. For ACP
+          // providers, use the selected provider/model because its adapter
+          // owns the actual warmup behavior.
+          model: defaultModelForProvider(provider, 'claude-haiku-4-5-20251001'),
           allowedTools: [],
           disallowedTools: ['*'],
           settingSources: [],
@@ -1387,8 +1391,12 @@ async function runAgentTurn(args: RunAgentTurnArgs): Promise<string> {
   // conversation_log queries; those need the real Telegram chat id
   // (`meetingChatId`).
   const sessionChatId = `warroom-text:${meetingId}`;
+  const provider = getSelectedProviderConfig();
   const sessionId = getSession(sessionChatId, agentId) ?? undefined;
-  const isFirstTurn = !sessionId;
+  const providerSessionId = sessionBelongsToProvider(sessionId, provider)
+    ? decodeProviderSession(provider, sessionId)
+    : undefined;
+  const isFirstTurn = !providerSessionId;
 
   // Framing hint: on the first turn we explain the meeting format.
   // On every turn we append a short transcript of what OTHER agents
@@ -1566,12 +1574,12 @@ async function runAgentTurn(args: RunAgentTurnArgs): Promise<string> {
     // Caught below so we can emit a clean system_note instead of crashing
     // the orchestrator and leaving the bubble stuck.
     requireEnabled('LLM_SPAWN_ENABLED');
-    const engine = EngineFactory.forProvider({ type: 'claude' });
+    const engine = EngineFactory.forProvider(provider);
     for await (const ev of engine.invoke({
       prompt: framedText,
-      provider: { type: 'claude' },
+      provider,
       cwd: agentDir,
-      sessionId,
+      sessionId: providerSessionId,
       settingSources: ['project', 'user'],
       // War-room runs with the SDK's default permission mode. Combined
       // with the per-agent tool policy below, every side-effect tool call
@@ -1584,7 +1592,7 @@ async function runAgentTurn(args: RunAgentTurnArgs): Promise<string> {
       ...(Object.keys(mcpServers).length ? { mcpServers } : {}),
       includePartialMessages: true,
       abortController: abortCtrl,
-      ...(agentModel ? { model: agentModel } : {}),
+      ...(defaultModelForProvider(provider, agentModel) ? { model: defaultModelForProvider(provider, agentModel) } : {}),
     })) {
       if (ev.type === 'session') {
         newSessionId = ev.sessionId;
@@ -1614,13 +1622,13 @@ async function runAgentTurn(args: RunAgentTurnArgs): Promise<string> {
           }
         }
       }
-      // Tool-call visibility: surface every MCP / SDK tool invocation as
+      // Tool-call visibility: surface every MCP / engine tool invocation as
       // its own event so the UI can render "research called web_search(…)"
       // under the agent bubble. Without this, a hallucinated "I'll create
-      // the slot" reads identical to a real tool call. The Claude Agent
-      // SDK reports tool use as `assistant` messages whose `content`
-      // includes blocks of `type: 'tool_use'`, and tool results come back
-      // as `user` messages whose blocks are `type: 'tool_result'`.
+      // the slot" reads identical to a real tool call. Engines report tool
+      // use as assistant messages whose `content` includes blocks of
+      // `type: 'tool_use'`, and tool results come back as user messages
+      // whose blocks are `type: 'tool_result'`.
       if (e.type === 'assistant') {
         const msg = e.message as Record<string, unknown> | undefined;
         const blocks = (msg?.content as Array<Record<string, unknown>> | undefined) ?? [];
@@ -1799,7 +1807,7 @@ async function runAgentTurn(args: RunAgentTurnArgs): Promise<string> {
     && !timedOut
     && !channel.isTurnFinalized(turnId);
   if (sessionSaveAllowed) {
-    setSession(sessionChatId, newSessionId!, agentId);
+    setSession(sessionChatId, encodeProviderSession(provider, newSessionId!) ?? newSessionId!, agentId);
   } else if (newSessionId) {
     logger.debug({
       agentId, meetingId, role, turnId,

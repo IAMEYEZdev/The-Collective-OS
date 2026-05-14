@@ -9,16 +9,14 @@ import { getScrubbedSdkEnv } from './security.js';
 import { requireEnabled } from './kill-switches.js';
 import { EngineFactory } from './agent-engine/index.js';
 import {
-  DEFAULT_CLAUDE_MODEL,
-  DEFAULT_CODEX_MODEL,
   ProviderConfig,
   ProviderRuntimeMode,
   ProviderThinkingMode,
   decodeProviderSession,
   encodeProviderSession,
-  getMainProviderConfig,
   sessionBelongsToProvider,
 } from './provider.js';
+import { defaultModelForProvider, getSelectedProviderConfig } from './active-provider.js';
 
 // ── MCP server loading ──────────────────────────────────────────────
 // The Agent SDK's settingSources loads CLAUDE.md and permissions from
@@ -180,18 +178,12 @@ export async function runAgent(
   // requireEnabled calls at their own SDK boundaries.
   requireEnabled('LLM_SPAWN_ENABLED');
 
-  const provider = providerConfig ?? getMainProviderConfig();
+  const provider = providerConfig ?? getSelectedProviderConfig();
   const providerSessionId = sessionBelongsToProvider(sessionId, provider)
     ? decodeProviderSession(provider, sessionId)
     : undefined;
 
-  const effectiveModel = model
-    ?? provider.model
-    ?? (provider.type === 'claude'
-      ? DEFAULT_CLAUDE_MODEL
-      : provider.type === 'codex'
-        ? DEFAULT_CODEX_MODEL
-        : undefined);
+  const effectiveModel = model ?? defaultModelForProvider(provider);
   const effectiveEffort = effortForMode(provider.runtimeMode);
   const effectiveThinking = thinkingForMode(provider.thinkingMode);
   // Read secrets from .env without polluting process.env.

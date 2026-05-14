@@ -297,15 +297,14 @@ Task: "${prompt.slice(0, 500)}"
 
 Reply with JSON: {"agent": "agent_id"}`;
 
-  // Primary path: Claude Haiku via OAuth — same auth the agents use, no
-  // free-tier quota wall. Gemini classification used to 429 here and
-  // surface a 500 to the dashboard, blocking the auto-assign UI.
+  // Primary path: selected provider via the agent engine. Gemini fallback
+  // can hit 429 and surface a 500, blocking the auto-assign UI.
   try {
     const raw = await extractViaClaude(classificationPrompt);
     const parsed = parseJsonResponse<{ agent: string }>(raw);
     if (parsed?.agent && validAgents.includes(parsed.agent)) return parsed.agent;
   } catch (err) {
-    logger.warn({ err: err instanceof Error ? err.message : err }, 'Haiku classify failed, falling back to Gemini');
+    logger.warn({ err: err instanceof Error ? err.message : err }, 'selected-provider classify failed, falling back to Gemini');
   }
 
   // Fallback: Gemini. Wrapped so a 429 doesn't bubble up — we'd rather
@@ -1035,7 +1034,7 @@ export function buildDashboardApp(botApi?: Api<RawApi>): Hono {
     return c.json({ ok: true, meetingId: id, autoEnded: stale });
   });
 
-  // Pre-warm the Claude Agent SDK path so the first user turn feels snappy.
+  // Pre-warm the selected provider path so the first user turn feels snappy.
   // The client calls this on page load in parallel with the intro animation.
   // Idempotent + fast: if warmup already ran, returns immediately.
   app.post('/api/warroom/text/warmup', async (c) => {
@@ -2663,7 +2662,7 @@ export function buildDashboardApp(botApi?: Api<RawApi>): Hono {
 
   // ── Agent split suggestions ─────────────────────────────────────────
   // Scans hive_mind for the last 200 actions per agent, sends the bag
-  // (agent description + their recent action summaries) to Haiku, and
+  // (agent description + their recent action summaries) to the selected provider, and
   // asks "is any one agent doing several distinct domains that warrant
   // a split?" Suggestions land in agent_suggestions and surface as a
   // lightbulb badge on the AgentCard. The user can dismiss (= "no
@@ -2690,10 +2689,9 @@ export function buildDashboardApp(botApi?: Api<RawApi>): Hono {
         .filter((s) => s.length > 0);
       // Sample evenly across the agent's last 200 entries, picking 12
       // representative summaries. We want diversity (different domains,
-      // not just the latest cluster) without bloating the prompt past
-      // Haiku's comfort zone — total prompt with 6 agents × 12
-      // summaries × ~80 chars stays under ~2 KB and typically completes
-      // in 15–25s.
+      // not just the latest cluster) without bloating the prompt — total
+      // prompt with 6 agents × 12 summaries × ~80 chars stays under ~2 KB
+      // and typically completes in 15–25s.
       const target = 12;
       const recentSummaries = allFiltered.length <= target
         ? allFiltered
@@ -2701,8 +2699,9 @@ export function buildDashboardApp(botApi?: Api<RawApi>): Hono {
       agentMeta.push({ id, description, rawCount: allFiltered.length, recentSummaries });
     }
 
-    // Skip agents with too little signal — splitting an agent that's
-    // done 5 things isn't useful, and Haiku will hallucinate splits.
+    // Skip agents with too little signal — splitting an agent that's done
+    // 5 things isn't useful, and small classifier prompts can hallucinate
+    // splits.
     const eligible = agentMeta.filter((a) => a.rawCount >= 20);
     if (eligible.length === 0) {
       return c.json({ ok: true, suggestions: [], reason: 'not enough hive_mind activity to analyze' });
@@ -2754,10 +2753,10 @@ export function buildDashboardApp(botApi?: Api<RawApi>): Hono {
       // 90s in practice, vs 4–5s for a standalone CLI call with the
       // same prompt size. Better to wait than fail spuriously.
       raw = await extractViaClaude(promptStr, 120_000);
-      logger.info({ elapsedMs: Date.now() - t0, responseBytes: raw.length }, 'agent suggestion: Haiku replied');
+      logger.info({ elapsedMs: Date.now() - t0, responseBytes: raw.length }, 'agent suggestion: selected provider replied');
     } catch (err) {
       logger.warn({ err: err instanceof Error ? err.message : err, elapsedMs: Date.now() - t0 }, 'agent suggestion analysis failed');
-      return c.json({ error: 'analysis failed (Haiku unavailable)' }, 503);
+      return c.json({ error: 'analysis failed (selected provider unavailable)' }, 503);
     }
     const parsed = parseJsonResponse<{ suggestions: any[] }>(raw);
     const list = Array.isArray(parsed?.suggestions) ? parsed!.suggestions : [];
