@@ -26,6 +26,7 @@ export async function runAcpAgent(
     ...(effectiveModel ? { model: effectiveModel } : {}),
     ...(provider.runtimeMode ? { runtimeMode: provider.runtimeMode } : {}),
     ...(provider.thinkingMode ? { thinkingMode: provider.thinkingMode } : {}),
+    allowDangerouslySkipPermissions: true,
     abortController,
   })) {
     if (event.type === 'session') newSessionId = event.sessionId;

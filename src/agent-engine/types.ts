@@ -39,6 +39,7 @@ export interface AgentTurnInput {
   thinkingMode?: string;
   effort?: 'low' | 'medium' | 'high' | 'max';
   thinking?: { type: 'adaptive' } | { type: 'enabled'; budgetTokens?: number } | { type: 'disabled' };
+  /** Claude SDK turn cap. ACP has no portable max-turns request field; ACP callers must also pass an abort timeout. */
   maxTurns?: number;
   permissionMode?: 'default' | 'bypassPermissions' | string;
   allowDangerouslySkipPermissions?: boolean;

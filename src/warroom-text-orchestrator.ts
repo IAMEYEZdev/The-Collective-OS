@@ -1701,6 +1701,8 @@ async function runAgentTurn(args: RunAgentTurnArgs): Promise<string> {
         const blocks = (msg?.content as Array<Record<string, unknown>> | undefined) ?? [];
         for (const b of blocks) {
           if (b.type === 'tool_use' && typeof b.id === 'string' && typeof b.name === 'string') {
+            if (seenProviderToolCalls.has(b.id)) continue;
+            seenProviderToolCalls.add(b.id);
             toolNamesUsed.push(b.name);
             toolCallsMade++;
             // Compact arg preview — full args can be huge (file dumps,

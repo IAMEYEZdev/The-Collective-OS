@@ -7,6 +7,7 @@ import * as acp from '@agentclientprotocol/sdk';
 import { PROJECT_ROOT } from '../config.js';
 import { logger } from '../logger.js';
 import type { ProviderConfig } from '../provider.js';
+import { getScrubbedSdkEnv } from '../security.js';
 import type { AgentEngine, AgentEngineEvent, AgentEngineProgressEvent, AgentTurnInput } from './types.js';
 import { emptyUsage } from './types.js';
 
@@ -315,15 +316,38 @@ export function getAcpCommand(provider: ProviderConfig): { command: string; args
 
 function getAcpEnv(env?: Record<string, string | undefined>): NodeJS.ProcessEnv {
   const localBin = path.join(PROJECT_ROOT, 'node_modules', '.bin');
-  const base: Record<string, string | undefined> = { ...(env ?? {}) };
-  for (const key of ['HOME', 'USER', 'LOGNAME', 'SHELL', 'TMPDIR', 'LANG', 'LC_ALL', 'TERM']) {
-    if (!base[key] && process.env[key]) base[key] = process.env[key];
+  const base = getScrubbedSdkEnv();
+  for (const [key, value] of Object.entries(env ?? {})) {
+    if (value === undefined) delete base[key];
+    else base[key] = value;
+  }
+  for (const key of Object.keys(base)) {
+    if (isSecretEnvName(key)) delete base[key];
   }
   const inheritedPath = base.PATH ?? process.env.PATH;
   base.PATH = inheritedPath
     ? `${inheritedPath}${path.delimiter}${localBin}`
     : localBin;
   return base as NodeJS.ProcessEnv;
+}
+
+function isSecretEnvName(key: string): boolean {
+  return [
+    'DASHBOARD_TOKEN',
+    'DB_ENCRYPTION_KEY',
+    'TELEGRAM_BOT_TOKEN',
+    'ANTHROPIC_API_KEY',
+  ].includes(key)
+    || /_API_KEY$/.test(key)
+    || /_TOKEN$/.test(key)
+    || /_SECRET$/.test(key)
+    || /^SECRET_/.test(key);
+}
+
+function isLockedDownToolPolicy(input: AgentTurnInput): boolean {
+  return input.disallowedTools?.includes('*') === true
+    || input.allowedTools?.length === 0
+    || input.permissionMode === 'default';
 }
 
 function toAcpMcpServers(mcpServers?: AgentTurnInput['mcpServers']): acp.McpServer[] {
@@ -631,7 +655,13 @@ export class AcpEngineAdapter implements AgentEngine {
 
         const accessOption = configOptions.find((cfg) => cfg.category === 'mode');
         const fullAccessValue = accessOption ? selectFullAccessConfigValue(accessOption) : undefined;
-        if (accessOption && fullAccessValue && !appliedModeConfig) {
+        if (
+          accessOption
+          && fullAccessValue
+          && !appliedModeConfig
+          && input.allowDangerouslySkipPermissions === true
+          && !isLockedDownToolPolicy(input)
+        ) {
           try {
             const response = await withSpawnError(connection.setSessionConfigOption({
               sessionId: sessionIdForConfig,

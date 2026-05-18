@@ -105,6 +105,10 @@ class FakeAgent {
       await this.conn.sessionUpdate({ sessionId: params.sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: process.env.OPENAI_API_KEY || 'no-key' } } });
       return { stopReason: 'end_turn' };
     }
+    if (${JSON.stringify(mode)} === 'env-windows') {
+      await this.conn.sessionUpdate({ sessionId: params.sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: (process.env.APPDATA || 'no-appdata') + '|' + (process.env.OPENAI_API_KEY || 'no-key') } } });
+      return { stopReason: 'end_turn' };
+    }
     await this.conn.sessionUpdate({ sessionId: params.sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'hello ' } } });
     await this.conn.sessionUpdate({ sessionId: params.sessionId, update: { sessionUpdate: 'plan', entries: [{ content: 'Inspect project', priority: 'high', status: 'in_progress' }] } });
     await this.conn.sessionUpdate({ sessionId: params.sessionId, update: { sessionUpdate: 'tool_call', toolCallId: 'tool-1', title: 'Reading files', kind: 'read', status: 'pending', locations: [{ path: 'README.md', line: 12 }] } });
@@ -363,6 +367,44 @@ describe('runAcpAgent', () => {
       if (previous === undefined) delete process.env.OPENAI_API_KEY;
       else process.env.OPENAI_API_KEY = previous;
     }
+  });
+
+  it('preserves non-secret Windows env vars while scrubbing secrets', async () => {
+    const script = writeFakeAcpAgent('env-windows');
+    const previousAppData = process.env.APPDATA;
+    const previousOpenAi = process.env.OPENAI_API_KEY;
+    process.env.APPDATA = 'C:\\Users\\test\\AppData\\Roaming';
+    process.env.OPENAI_API_KEY = 'parent-secret';
+    try {
+      const result = await runAcpAgent(
+        { type: 'acp', command: process.execPath, args: [script] },
+        'hi',
+        undefined,
+      );
+      expect(result.text).toBe('C:\\Users\\test\\AppData\\Roaming|no-key');
+    } finally {
+      if (previousAppData === undefined) delete process.env.APPDATA;
+      else process.env.APPDATA = previousAppData;
+      if (previousOpenAi === undefined) delete process.env.OPENAI_API_KEY;
+      else process.env.OPENAI_API_KEY = previousOpenAi;
+    }
+  });
+
+  it('does not force ACP full-access mode for locked-down calls', async () => {
+    const script = writeFakeAcpAgent('access');
+    let text: string | null = null;
+    for await (const event of new AcpEngineAdapter().invoke({
+      prompt: 'hi',
+      provider: { type: 'acp', command: process.execPath, args: [script] },
+      cwd: process.cwd(),
+      allowDangerouslySkipPermissions: true,
+      allowedTools: [],
+      disallowedTools: ['*'],
+    })) {
+      if (event.type === 'result') text = event.text;
+    }
+
+    expect(text).toBe('no-mode');
   });
 
   it('surfaces ACP errors', async () => {
