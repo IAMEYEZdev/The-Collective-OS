@@ -221,6 +221,36 @@ test('chat sends a message, renders progress, streamed text, and keeps text sele
   expect(selectable).toBe('text');
 });
 
+test('provider tool progress renders once per tool id', async ({ page }) => {
+  await page.goto('/chat?token=test&chatId=e2e');
+
+  await page.getByPlaceholder('Type a message. Shift+Enter for newline.').fill('dedupe fake tool progress');
+  await page.getByRole('button', { name: /send/i }).click();
+  await page.evaluate(() => {
+    (window as any).__emitSse('user_message', { content: 'dedupe fake tool progress', source: 'dashboard' });
+    (window as any).__emitSse('processing', { processing: true });
+    (window as any).__emitSse('progress', {
+      description: 'Running fake tool',
+      progressKind: 'tool_active',
+      status: 'pending',
+      toolCallId: 'tool-dedupe',
+      locations: [{ path: 'README.md', line: 12 }],
+      timestamp: Date.now(),
+    });
+    (window as any).__emitSse('progress', {
+      description: 'Running fake tool',
+      progressKind: 'tool_active',
+      status: 'pending',
+      toolCallId: 'tool-dedupe',
+      locations: [{ path: 'README.md', line: 12 }],
+      timestamp: Date.now() + 1,
+    });
+  });
+
+  await expect(page.getByText('Running fake tool')).toHaveCount(2);
+  await expect(page.getByText('README.md:12')).toHaveCount(1);
+});
+
 test('stop button aborts an active fake-provider turn', async ({ page }) => {
   await page.goto('/chat?token=test&chatId=e2e');
 
