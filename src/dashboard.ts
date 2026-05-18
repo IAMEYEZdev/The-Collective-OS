@@ -107,6 +107,7 @@ import {
   DEFAULT_CODEX_MODEL,
   ProviderConfig,
   getProviderDisplay,
+  checkProviderAvailability,
   getMainProviderConfig,
   normalizeProviderConfig,
   setMainProviderConfig,
@@ -2333,6 +2334,19 @@ export function buildDashboardApp(botApi?: Api<RawApi>): Hono {
     const provider = normalizeProviderConfig(candidate);
     const validationError = validateProviderConfig(provider);
     if (validationError) return c.json({ error: validationError }, 400);
+
+    // Preflight: if the provider's CLI is not installed, fail fast with an
+    // actionable response so the user can install it before the next chat
+    // turn crashes with a spawn ENOENT they can't easily decode.
+    const availability = checkProviderAvailability(provider);
+    if (!availability.ok) {
+      return c.json({
+        error: availability.error,
+        installCommand: availability.installCommand,
+        setupHint: availability.setupHint,
+        docsUrl: availability.docsUrl,
+      }, 400);
+    }
 
     try {
       if (agentId === 'main') {
