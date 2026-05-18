@@ -21,7 +21,7 @@ export interface ProviderConfig {
   args?: string[];
 }
 
-export const DEFAULT_PROVIDER: ProviderConfig = { type: 'opencode' };
+export const DEFAULT_PROVIDER: ProviderConfig = { type: 'claude', model: 'claude-opus-4-6' };
 export const DEFAULT_CLAUDE_MODEL = 'claude-opus-4-6';
 export const DEFAULT_CODEX_MODEL = 'gpt-5.5';
 

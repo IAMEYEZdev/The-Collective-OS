@@ -266,14 +266,14 @@ async function configureProvider(): Promise<SetupProviderType> {
   info('ACP providers use their own auth and model config; Claude uses Claude Code auth.');
   console.log();
 
-  bullet('1. Claude (default)');
-  bullet('2. OpenCode');
+  bullet('1. Claude');
+  bullet('2. OpenCode (default)');
   bullet('3. Gemini CLI');
   bullet('4. Codex ACP adapter');
   bullet('5. Custom ACP command');
   console.log();
 
-  const answer = (await ask('Select provider', '1')).toLowerCase();
+  const answer = (await ask('Select provider', '2')).toLowerCase();
   let choice: SetupProviderType;
   if (answer === '1' || answer === 'claude' || answer === 'c') {
     choice = 'claude';
@@ -286,8 +286,8 @@ async function configureProvider(): Promise<SetupProviderType> {
   } else if (answer === '5' || answer === 'acp' || answer === 'custom') {
     choice = 'acp';
   } else {
-    warn(`Unknown provider "${answer}". Using Claude.`);
-    choice = 'claude';
+    warn(`Unknown provider "${answer}". Using OpenCode.`);
+    choice = 'opencode';
   }
 
   if (choice === 'claude') {

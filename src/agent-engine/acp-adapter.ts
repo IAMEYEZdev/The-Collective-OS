@@ -14,7 +14,10 @@ class ClaudeClawAcpClient {
   private accumulatedText = '';
   private toolTitles = new Map<string, string>();
 
-  constructor(private readonly emit: (event: AgentEngineEvent) => void) {}
+  constructor(
+    private readonly emit: (event: AgentEngineEvent) => void,
+    private readonly policy: AcpToolPolicy = {},
+  ) {}
 
   get text(): string {
     return this.accumulatedText;
@@ -81,6 +84,13 @@ class ClaudeClawAcpClient {
   }
 
   async requestPermission(params: acp.RequestPermissionRequest): Promise<acp.RequestPermissionResponse> {
+    if (!isAcpToolAllowed(params.toolCall, this.policy)) {
+      const reject = params.options.find((o) => o.kind === 'reject_once')
+        ?? params.options.find((o) => o.kind === 'reject_always');
+      if (reject) return { outcome: { outcome: 'selected', optionId: reject.optionId } };
+      return { outcome: { outcome: 'cancelled' } };
+    }
+
     const allow = params.options.find((o) => o.kind === 'allow_always')
       ?? params.options.find((o) => o.kind === 'allow_once')
       ?? params.options[0];
@@ -89,11 +99,17 @@ class ClaudeClawAcpClient {
   }
 
   async readTextFile(params: acp.ReadTextFileRequest): Promise<acp.ReadTextFileResponse> {
+    if (!isAcpClientFsAllowed('read', this.policy)) {
+      throw new Error(`ACP file read blocked by tool policy: ${params.path}`);
+    }
     const fs = await import('fs');
     return { content: fs.readFileSync(params.path, 'utf-8') };
   }
 
   async writeTextFile(params: acp.WriteTextFileRequest): Promise<acp.WriteTextFileResponse> {
+    if (!isAcpClientFsAllowed('write', this.policy)) {
+      throw new Error(`ACP file write blocked by tool policy: ${params.path}`);
+    }
     const fs = await import('fs');
     fs.writeFileSync(params.path, params.content, 'utf-8');
     return {};
@@ -102,6 +118,57 @@ class ClaudeClawAcpClient {
   private emitProgress(progress: AgentEngineProgressEvent, raw: unknown): void {
     this.emit({ type: 'progress', progress, raw });
   }
+}
+
+interface AcpToolPolicy {
+  allowedTools?: string[];
+  disallowedTools?: string[];
+}
+
+function normalizeToolToken(value: string): string {
+  return value.toLowerCase().replace(/[\s_-]+/g, '');
+}
+
+function acpToolCandidates(toolCall: acp.ToolCallUpdate): string[] {
+  const candidates = [
+    toolCall.title ?? '',
+    toolCall.kind ?? '',
+    toolCall.toolCallId ?? '',
+  ];
+  if (toolCall.kind === 'execute') candidates.push('Bash');
+  if (toolCall.kind === 'read') candidates.push('Read');
+  if (toolCall.kind === 'search') candidates.push('Grep', 'Glob');
+  if (toolCall.kind === 'edit' || toolCall.kind === 'move' || toolCall.kind === 'delete') {
+    candidates.push('Edit', 'Write');
+  }
+  return candidates.filter(Boolean).map(normalizeToolToken);
+}
+
+function tokenMatchesTool(token: string, candidates: string[]): boolean {
+  const normalized = normalizeToolToken(token);
+  return candidates.some((candidate) => candidate === normalized || candidate.includes(normalized));
+}
+
+function isAcpToolAllowed(toolCall: acp.ToolCallUpdate, policy: AcpToolPolicy): boolean {
+  const allowedTools = policy.allowedTools;
+  const disallowedTools = policy.disallowedTools;
+  const candidates = acpToolCandidates(toolCall);
+
+  if (allowedTools && allowedTools.some((tool) => tokenMatchesTool(tool, candidates))) return true;
+  if (disallowedTools?.includes('*')) return false;
+  if (disallowedTools?.some((tool) => tokenMatchesTool(tool, candidates))) return false;
+  if (allowedTools && allowedTools.length === 0) return false;
+  if (allowedTools && allowedTools.length > 0) return false;
+  return true;
+}
+
+function isAcpClientFsAllowed(kind: 'read' | 'write', policy: AcpToolPolicy): boolean {
+  const toolCall: acp.ToolCallUpdate = {
+    toolCallId: `client-fs-${kind}`,
+    title: kind === 'read' ? 'Read file' : 'Write file',
+    kind: kind === 'read' ? 'read' : 'edit',
+  };
+  return isAcpToolAllowed(toolCall, policy);
 }
 
 function parseLocations(value: unknown): Array<{ path: string; line?: number | null }> | undefined {
@@ -248,13 +315,28 @@ export function getAcpCommand(provider: ProviderConfig): { command: string; args
 
 function getAcpEnv(env?: Record<string, string | undefined>): NodeJS.ProcessEnv {
   const localBin = path.join(PROJECT_ROOT, 'node_modules', '.bin');
-  return {
-    ...process.env,
-    ...env,
-    PATH: process.env.PATH
-      ? `${process.env.PATH}${path.delimiter}${localBin}`
-      : localBin,
-  } as NodeJS.ProcessEnv;
+  const base: Record<string, string | undefined> = { ...(env ?? {}) };
+  for (const key of ['HOME', 'USER', 'LOGNAME', 'SHELL', 'TMPDIR', 'LANG', 'LC_ALL', 'TERM']) {
+    if (!base[key] && process.env[key]) base[key] = process.env[key];
+  }
+  const inheritedPath = base.PATH ?? process.env.PATH;
+  base.PATH = inheritedPath
+    ? `${inheritedPath}${path.delimiter}${localBin}`
+    : localBin;
+  return base as NodeJS.ProcessEnv;
+}
+
+function toAcpMcpServers(mcpServers?: AgentTurnInput['mcpServers']): acp.McpServer[] {
+  if (!mcpServers) return [];
+  return Object.entries(mcpServers).map(([name, cfg]) => ({
+    name,
+    command: cfg.command,
+    args: cfg.args ?? [],
+    env: Object.entries(cfg.env ?? {}).map(([envName, value]) => ({
+      name: envName,
+      value,
+    })),
+  }));
 }
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
@@ -391,7 +473,10 @@ export class AcpEngineAdapter implements AgentEngine {
       if (stderr.length > 8000) stderr = stderr.slice(-8000);
     });
 
-    const client = new ClaudeClawAcpClient((event) => pending.push(event));
+    const client = new ClaudeClawAcpClient((event) => pending.push(event), {
+      allowedTools: input.allowedTools,
+      disallowedTools: input.disallowedTools,
+    });
     const inputStream = Writable.toWeb(child.stdin!);
     const outputStream = Readable.toWeb(child.stdout!);
     const stream = acp.ndJsonStream(inputStream, outputStream);
@@ -433,7 +518,11 @@ export class AcpEngineAdapter implements AgentEngine {
       if (activeSessionId) {
         if (canResumeSession) {
           try {
-            const resumed = await withSpawnError(connection.resumeSession({ sessionId: activeSessionId, cwd: input.cwd }));
+            const resumed = await withSpawnError(connection.resumeSession({
+              sessionId: activeSessionId,
+              cwd: input.cwd,
+              mcpServers: toAcpMcpServers(input.mcpServers),
+            }));
             activeConfigOptions = resumed.configOptions ?? [];
           } catch (err) {
             if (!isSessionNotFoundError(err)) throw err;
@@ -564,7 +653,7 @@ export class AcpEngineAdapter implements AgentEngine {
       const createSession = async (): Promise<string> => {
         const created = await withSpawnError(connection.newSession({
           cwd: input.cwd,
-          mcpServers: [],
+          mcpServers: toAcpMcpServers(input.mcpServers),
         }));
         activeConfigOptions = created.configOptions ?? [];
         return created.sessionId;

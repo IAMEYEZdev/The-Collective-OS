@@ -5,7 +5,7 @@ import path from 'path';
 import { pathToFileURL } from 'url';
 
 import { runAcpAgent } from './acp-runner.js';
-import { inspectAcpProviderRuntimeOptions } from './agent-engine/acp-adapter.js';
+import { AcpEngineAdapter, inspectAcpProviderRuntimeOptions } from './agent-engine/acp-adapter.js';
 
 const tmpDirs: string[] = [];
 
@@ -30,9 +30,10 @@ class FakeAgent {
       agentCapabilities: ${mode === 'noresume' ? '{ loadSession: false }' : '{ loadSession: false, session: { resume: true } }'},
     };
   }
-  async newSession() {
+  async newSession(params) {
     const id = 'sess-' + ${JSON.stringify(mode)};
     this.sessions.add(id);
+    this.mcpServers = params.mcpServers || [];
     if (${JSON.stringify(mode)} === 'config') {
       return {
         sessionId: id,
@@ -53,7 +54,7 @@ class FakeAgent {
     }
     return { sessionId: id };
   }
-  async resumeSession(params) { this.sessions.add(params.sessionId); return {}; }
+  async resumeSession(params) { this.sessions.add(params.sessionId); this.mcpServers = params.mcpServers || []; return {}; }
   async authenticate() { return {}; }
   async setSessionMode() { return {}; }
   async setSessionConfigOption(params) {
@@ -81,6 +82,27 @@ class FakeAgent {
     }
     if (${JSON.stringify(mode)} === 'access') {
       await this.conn.sessionUpdate({ sessionId: params.sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: this.currentMode || 'no-mode' } } });
+      return { stopReason: 'end_turn' };
+    }
+    if (${JSON.stringify(mode)} === 'mcp') {
+      await this.conn.sessionUpdate({ sessionId: params.sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: JSON.stringify(this.mcpServers || []) } } });
+      return { stopReason: 'end_turn' };
+    }
+    if (${JSON.stringify(mode)} === 'permission') {
+      const response = await this.conn.requestPermission({
+        sessionId: params.sessionId,
+        toolCall: { toolCallId: 'tool-exec', title: 'Run shell command', kind: 'execute', status: 'pending' },
+        options: [
+          { kind: 'allow_once', name: 'Allow', optionId: 'allow' },
+          { kind: 'reject_once', name: 'Reject', optionId: 'reject' },
+        ],
+      });
+      const outcome = response.outcome.outcome === 'selected' ? response.outcome.optionId : response.outcome.outcome;
+      await this.conn.sessionUpdate({ sessionId: params.sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: outcome } } });
+      return { stopReason: 'end_turn' };
+    }
+    if (${JSON.stringify(mode)} === 'env') {
+      await this.conn.sessionUpdate({ sessionId: params.sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: process.env.OPENAI_API_KEY || 'no-key' } } });
       return { stopReason: 'end_turn' };
     }
     await this.conn.sessionUpdate({ sessionId: params.sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'hello ' } } });
@@ -275,6 +297,72 @@ describe('runAcpAgent', () => {
       undefined,
     );
     expect(result.text).toBe('full-access');
+  });
+
+  it('passes MCP servers to ACP sessions', async () => {
+    const script = writeFakeAcpAgent('mcp');
+    const events = [];
+    for await (const event of new AcpEngineAdapter().invoke({
+      prompt: 'hi',
+      provider: { type: 'acp', command: process.execPath, args: [script] },
+      cwd: process.cwd(),
+      mcpServers: {
+        notes: {
+          command: 'notes-mcp',
+          args: ['--stdio'],
+          env: { NOTES_TOKEN: 'token-1' },
+        },
+      },
+    })) {
+      events.push(event);
+    }
+    const result = events.find((event) => event.type === 'result');
+    expect(result?.type).toBe('result');
+    expect(JSON.parse(result?.type === 'result' ? result.text ?? '[]' : '[]')).toEqual([
+      {
+        name: 'notes',
+        command: 'notes-mcp',
+        args: ['--stdio'],
+        env: [{ name: 'NOTES_TOKEN', value: 'token-1' }],
+      },
+    ]);
+  });
+
+  it('enforces ACP tool policy permission requests', async () => {
+    const script = writeFakeAcpAgent('permission');
+    const collectText = async (allowedTools: string[], disallowedTools: string[]) => {
+      let text: string | null = null;
+      for await (const event of new AcpEngineAdapter().invoke({
+        prompt: 'hi',
+        provider: { type: 'acp', command: process.execPath, args: [script] },
+        cwd: process.cwd(),
+        allowedTools,
+        disallowedTools,
+      })) {
+        if (event.type === 'result') text = event.text;
+      }
+      return text;
+    };
+
+    await expect(collectText([], ['*'])).resolves.toBe('reject');
+    await expect(collectText(['Bash'], ['*'])).resolves.toBe('allow');
+  });
+
+  it('does not leak parent secret env vars into ACP children by default', async () => {
+    const script = writeFakeAcpAgent('env');
+    const previous = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = 'parent-secret';
+    try {
+      const result = await runAcpAgent(
+        { type: 'acp', command: process.execPath, args: [script] },
+        'hi',
+        undefined,
+      );
+      expect(result.text).toBe('no-key');
+    } finally {
+      if (previous === undefined) delete process.env.OPENAI_API_KEY;
+      else process.env.OPENAI_API_KEY = previous;
+    }
   });
 
   it('surfaces ACP errors', async () => {

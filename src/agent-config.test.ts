@@ -142,6 +142,11 @@ describe('main description', () => {
 });
 
 describe('provider config', () => {
+  it('keeps legacy installs on Claude when no provider is configured', async () => {
+    const { getMainProviderConfig } = await import('./provider.js');
+    expect(getMainProviderConfig()).toEqual({ type: 'claude', model: 'claude-opus-4-6' });
+  });
+
   it('maps legacy Claude model to Claude provider', async () => {
     writeAgentYaml('legacy', {
       name: 'Legacy',

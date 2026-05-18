@@ -1531,6 +1531,7 @@ async function runAgentTurn(args: RunAgentTurnArgs): Promise<string> {
   // tool loops within an agent's maxTurns headroom.
   const TOOL_BUDGET_PER_TURN = 8;
   let toolCallsMade = 0;
+  const seenProviderToolCalls = new Set<string>();
   // Track tool work so we can surface a meaningful fallback when the
   // agent burns its turn budget on tools and never produces final text.
   // Without this the user sees an empty bubble and has no idea the agent
@@ -1601,12 +1602,78 @@ async function runAgentTurn(args: RunAgentTurnArgs): Promise<string> {
         fullText += ev.delta;
         channel.emit({ type: 'agent_chunk', turnId, agentId, role, delta: ev.delta });
       }
+      if (ev.type === 'progress' && ev.progress.type === 'tool_active') {
+        const toolUseId = ev.progress.toolCallId ?? `${agentId}:${ev.progress.description}`;
+        const isFirstToolEvent = !seenProviderToolCalls.has(toolUseId);
+        if (isFirstToolEvent) {
+          seenProviderToolCalls.add(toolUseId);
+          toolNamesUsed.push(ev.progress.description);
+          toolCallsMade++;
+          channel.emit({
+            type: 'tool_call',
+            turnId, agentId,
+            toolUseId,
+            tool: ev.progress.description,
+            argsPreview: ev.progress.locations?.map((loc) => loc.line ? `${loc.path}:${loc.line}` : loc.path).join(', ') ?? '',
+          });
+          try {
+            insertAuditLog(
+              agentId,
+              meetingChatId || '',
+              'tool_call',
+              `${ev.progress.description} (${ev.progress.kind ?? 'provider'})`.slice(0, 2000),
+              false,
+            );
+          } catch (auditErr) {
+            logger.warn({ err: auditErr instanceof Error ? auditErr.message : auditErr }, 'audit log write failed');
+          }
+          if (toolCallsMade > TOOL_BUDGET_PER_TURN) {
+            channel.emit({
+              type: 'system_note',
+              turnId,
+              text: `${agentId === 'main' ? 'Main' : agentId} hit the per-turn tool budget (${TOOL_BUDGET_PER_TURN} calls). Asking them to wrap up.`,
+              tone: 'warn',
+              dismissable: true,
+            });
+            try { abortCtrl.abort(); } catch { /* noop */ }
+          }
+        }
+        if (ev.progress.status === 'completed' || ev.progress.status === 'failed') {
+          channel.emit({
+            type: 'tool_result',
+            turnId, agentId,
+            toolUseId,
+            status: ev.progress.status === 'failed' ? 'error' : 'ok',
+            resultPreview: ev.progress.status,
+          });
+        }
+      }
       const e = ev.raw as Record<string, unknown> | undefined;
       if (!e) {
         if (ev.type === 'result') {
           if (typeof ev.text === 'string' && ev.text.length > fullText.length) fullText = ev.text;
           stopReason = ev.stopReason;
           gotResult = true;
+          try {
+            if (ev.usage) {
+              saveTokenUsage(
+                sessionChatId,
+                undefined,
+                ev.usage.inputTokens,
+                ev.usage.outputTokens,
+                ev.usage.cacheReadInputTokens,
+                ev.usage.lastCallCacheRead + ev.usage.lastCallInputTokens,
+                ev.usage.totalCostUsd,
+                ev.usage.didCompact,
+                agentId,
+              );
+            }
+          } catch (err) {
+            logger.warn(
+              { err: err instanceof Error ? err.message : err, agentId, meetingId },
+              'failed to persist warroom token usage (non-fatal)',
+            );
+          }
         }
         if (cancelFlag.cancelled) break;
         continue;

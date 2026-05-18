@@ -39,7 +39,7 @@ import { classifyMessageComplexity } from './message-classifier.js';
 import { scanForSecrets, redactSecrets } from './exfiltration-guard.js';
 import { trackUsage, getRateStatus } from './rate-tracker.js';
 import { buildCostFooter } from './cost-footer.js';
-import { DEFAULT_CLAUDE_MODEL, getProviderDisplay, ProviderConfig } from './provider.js';
+import { DEFAULT_CLAUDE_MODEL, getMainProviderConfig, getProviderDisplay, ProviderConfig } from './provider.js';
 import { setHighImportanceCallback } from './memory-ingest.js';
 import { messageQueue } from './message-queue.js';
 import { parseDelegation, delegateToAgent, getAvailableAgents } from './orchestrator.js';
@@ -109,7 +109,7 @@ function checkContextWarning(chatId: string, sessionId: string | undefined, usag
 }
 
 function activeProvider(): ProviderConfig {
-  return agentProvider ?? { type: 'opencode' };
+  return agentProvider ?? getMainProviderConfig();
 }
 
 function canUseTelegramUrlButton(rawUrl: string): boolean {
