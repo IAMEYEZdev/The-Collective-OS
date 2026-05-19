@@ -124,6 +124,7 @@ interface ProviderStatus {
   label: string;
   model: string;
   runtime: string;
+  acpEnabled?: boolean;
 }
 
 function SidebarFooter() {
@@ -135,6 +136,7 @@ function SidebarFooter() {
   const anyOff = off.length > 0;
   const name = workspaceName.value;
   const providerType = provider.data?.providerType ?? 'claude';
+  const acpEnabled = provider.data?.acpEnabled ?? false;
 
   async function switchProvider(nextType: string) {
     if (nextType === providerType || switching) return;
@@ -169,18 +171,20 @@ function SidebarFooter() {
             <div class="text-[11px] uppercase text-[var(--color-text-faint)]">Runtime</div>
             <div class="text-[12.5px] font-medium text-[var(--color-text)] truncate">{provider.data?.label ?? 'Claude'}</div>
           </div>
-          <select
-            value={providerType}
-            disabled={switching}
-            onChange={(event) => switchProvider((event.currentTarget as HTMLSelectElement).value)}
-            class="h-8 max-w-[116px] rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-2 text-[12px] text-[var(--color-text)] disabled:opacity-60"
-            aria-label="Switch main provider"
-          >
-            <option value="claude">Claude</option>
-            <option value="opencode">OpenCode</option>
-            <option value="gemini">Gemini</option>
-            <option value="codex">Codex</option>
-          </select>
+          {acpEnabled ? (
+            <select
+              value={providerType}
+              disabled={switching}
+              onChange={(event) => switchProvider((event.currentTarget as HTMLSelectElement).value)}
+              class="h-8 max-w-[116px] rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-2 text-[12px] text-[var(--color-text)] disabled:opacity-60"
+              aria-label="Switch main provider"
+            >
+              <option value="claude">Claude</option>
+              <option value="opencode">OpenCode</option>
+              <option value="gemini">Gemini</option>
+              <option value="codex">Codex</option>
+            </select>
+          ) : null}
         </div>
         <div class="mt-1.5 text-[11px] leading-snug text-[var(--color-text-muted)]">
           <span class="text-[var(--color-text-faint)]">Model</span>{' '}

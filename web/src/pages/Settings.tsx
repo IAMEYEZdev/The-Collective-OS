@@ -28,6 +28,7 @@ interface Health {
   provider?: { type: string; command?: string; args?: string[]; model?: string; runtimeMode?: RuntimeMode; thinkingMode?: ThinkingMode };
   providerType?: string;
   runtime?: string;
+  acpEnabled?: boolean;
 }
 
 interface SecurityStatus { [key: string]: any; }
@@ -145,14 +146,16 @@ export function Settings() {
             </Card>
           </Section>
 
-          <Section
-            title="Agent provider"
-            subtitle="Choose a built-in provider or point ClaudeClaw at any ACP-compatible agent command."
-          >
-            <Card>
-              <ProviderConfigPanel health={health} />
-            </Card>
-          </Section>
+          {health.data?.acpEnabled ? (
+            <Section
+              title="Agent provider (beta)"
+              subtitle="Provider selection is beta. Additional CLI setup may be required for non-Claude providers. Choose a built-in provider or point ClaudeClaw at any ACP-compatible agent command."
+            >
+              <Card>
+                <ProviderConfigPanel health={health} />
+              </Card>
+            </Section>
+          ) : null}
 
           <Section
             title="Kill switches"

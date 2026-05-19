@@ -9,3 +9,8 @@ process.env.WARROOM_ENABLED = process.env.WARROOM_ENABLED || 'false';
 // middleware lets it through. Without this, the CSRF check has no
 // allowed-origin host and 403s every cross-origin POST.
 process.env.DASHBOARD_URL = process.env.DASHBOARD_URL || 'https://dash.test.example';
+// Contract tests exercise the multi-provider feature surface (models endpoint,
+// runtime-options, PATCH /api/agents/:id/provider). The ENABLE_ACP gate defaults
+// to off, so enable it here to keep those tests meaningful. Tests for the gated
+// (off) state should override this explicitly.
+process.env.ENABLE_ACP = process.env.ENABLE_ACP || 'true';
