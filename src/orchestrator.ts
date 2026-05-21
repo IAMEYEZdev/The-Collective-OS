@@ -47,6 +47,34 @@ import {
 } from './deepsec/latent-bridge.js';
 import type { ScanLatentResult, StructuralSignal, GateSignal } from './deepsec/latent-bridge.js';
 import { scanDirectory } from './deepsec/scanner.js';
+import {
+  planAcquisitionBatch,
+  encodeIntentSignal,
+  createBorgQueenReport,
+  createBorgQueenPayload as createBorgArcQueenPayload,
+} from './borg-arc/latent-bridge.js';
+import type {
+  AcquisitionThreadResult,
+  BorgQueenReport,
+  PreScreeningSignal,
+} from './borg-arc/latent-bridge.js';
+import {
+  initializeCluster,
+  createClusterInitSignal,
+  aggregateGlobalState,
+  checkGlobalConvergence,
+  createGlobalBroadcast,
+  computeCreditAssignments,
+  detectCapabilityGaps,
+  gapsToBorgArcContext,
+  createBorgQueenPayload,
+} from './borg-queen/latent-bridge.js';
+import type {
+  ClusterConfig,
+  ClusterResult,
+  AgentRoundState,
+  CapabilityGap,
+} from './borg-queen/latent-bridge.js';
 import { logger } from './logger.js';
 import { buildMemoryContext } from './memory.js';
 
@@ -81,6 +109,12 @@ export interface DelegationResult {
   scanAnalysis?: ScanLatentResult;
   /** L2 DeepSec: gate signal (pass/fail/review) */
   securityGate?: GateSignal;
+  /** L3 Borg Arc: acquisition batch report for Borg Queen (present when repos evaluated) */
+  borgArcReport?: BorgQueenReport;
+  /** L6 Borg Queen: cluster config used for orchestration (present when cluster ran) */
+  borgQueenCluster?: ClusterConfig;
+  /** L6 Borg Queen: capability gaps detected across recent clusters */
+  capabilityGaps?: CapabilityGap[];
 }
 
 export interface AgentInfo {
@@ -524,7 +558,7 @@ export async function delegateToAgent(
               rounds: scanAnalysisResult.rounds.length,
               converged: scanAnalysisResult.converged,
               findings: scanAnalysisResult.totalUniqueFindings,
-              gate: securityGateResult.decision,
+              gate: securityGateResult.gate,
               broadcastTargets: Array.from(broadcastPayloads.keys()),
             },
             'L2 DeepSec: security scan analysis complete',
@@ -533,6 +567,76 @@ export async function delegateToAgent(
       } catch (l2Err) {
         // L2 failure must never block delegation
         logger.warn({ taskId, agentId, err: l2Err }, 'L2 DeepSec post-delegation failed (non-fatal)');
+      }
+
+      // ── L3 Borg Arc: post-delegation acquisition coordination ──
+      // If L1 and L2 signals are available, encode them for Borg Queen reporting.
+      // Actual parallel acquisition threads run separately via planAcquisitionBatch.
+      let borgArcReportResult: BorgQueenReport | undefined;
+      try {
+        if (graphAnalysisResult && scanAnalysisResult) {
+          const intent = {
+            priority: 'structural_compatibility' as const,
+            targetLayer: 'L1' as const,
+            riskTolerance: 'standard' as const,
+          };
+
+          // Create a report stub for the Borg Queen from available signals
+          const threadResult: AcquisitionThreadResult = {
+            threadId: `thread-${taskId}`,
+            repoUrl: agentId,
+            rounds: [],
+            converged: scanAnalysisResult.converged,
+            finalDecision: securityGateResult?.gate === 'fail' ? 'skip' : 'review',
+            finalConfidence: securityGateResult?.confidence ?? 0.5,
+            finalState: scanAnalysisResult.finalState,
+            qualityTier: 'standard',
+          };
+          borgArcReportResult = createBorgQueenReport(threadResult, intent);
+          logger.info(
+            { taskId, agentId, decision: threadResult.finalDecision },
+            'L3 Borg Arc: acquisition report generated for Borg Queen',
+          );
+        }
+      } catch (l3Err) {
+        logger.warn({ taskId, agentId, err: l3Err }, 'L3 Borg Arc post-delegation failed (non-fatal)');
+      }
+
+      // ── L6 Borg Queen: outer orchestrator cluster initialization ──
+      // Creates cluster config from available layer signals for future aggregation.
+      let borgQueenClusterResult: ClusterConfig | undefined;
+      let capabilityGapsResult: CapabilityGap[] | undefined;
+      try {
+        // Initialize a cluster config capturing this delegation's layer participants
+        const activeParticipants: Array<{ agentId: string; layer: string; latentCapable?: boolean }> = [];
+        if (graphAnalysisResult) activeParticipants.push({ agentId: 'gitnexus', layer: 'L1' });
+        if (scanAnalysisResult) activeParticipants.push({ agentId: 'deepsec', layer: 'L2' });
+        if (borgArcReportResult) activeParticipants.push({ agentId: 'borgarc', layer: 'L3' });
+
+        if (activeParticipants.length > 0) {
+          const complexity = axDiscoveryResult?.depthOverride?.complexity ?? 'moderate';
+          borgQueenClusterResult = initializeCluster({
+            taskId,
+            participants: activeParticipants,
+            complexity,
+            playbookPrior: graphAnalysisResult?.finalState,
+          });
+
+          const initSignal = createClusterInitSignal(borgQueenClusterResult);
+          logger.info(
+            {
+              taskId,
+              agentId,
+              clusterId: borgQueenClusterResult.clusterId,
+              participants: activeParticipants.length,
+              maxRounds: borgQueenClusterResult.maxRounds,
+              initSignalDim: initSignal.length,
+            },
+            'L6 Borg Queen: cluster initialized for delegation',
+          );
+        }
+      } catch (l6Err) {
+        logger.warn({ taskId, agentId, err: l6Err }, 'L6 Borg Queen cluster init failed (non-fatal)');
       }
 
       return {
@@ -550,6 +654,9 @@ export async function delegateToAgent(
         graphAnalysis: graphAnalysisResult,
         scanAnalysis: scanAnalysisResult,
         securityGate: securityGateResult,
+        borgArcReport: borgArcReportResult,
+        borgQueenCluster: borgQueenClusterResult,
+        capabilityGaps: capabilityGapsResult,
       };
     } catch (innerErr) {
       clearTimeout(timer);
