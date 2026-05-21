@@ -14,6 +14,20 @@ import {
   autoReflect,
 } from './hermes/index.js';
 import type { HermesMessage, LatentPayload, AutoReflectionResult } from './hermes/index.js';
+import {
+  discover,
+  matchPlaybook,
+  getCompiledPrompt,
+  runAxACE,
+} from './ax/index.js';
+import type {
+  ReasoningStructure,
+  StructureInitializer,
+  DepthOverride,
+  AxACEResult,
+  PlaybookEntry,
+  CompiledPrompt,
+} from './ax/index.js';
 import { logger } from './logger.js';
 import { buildMemoryContext } from './memory.js';
 
@@ -29,6 +43,19 @@ export interface DelegationResult {
   hermesMessage?: HermesMessage;
   /** Auto-reflection result (present when Hermes reflection ran post-delegation) */
   reflection?: AutoReflectionResult;
+  /** L5 Ax: Self-Discover reasoning structure + depth override */
+  axDiscovery?: {
+    structure: ReasoningStructure;
+    initializer: StructureInitializer;
+    depthOverride: DepthOverride;
+    cached: boolean;
+  };
+  /** L5 Ax: AxACE playbook result (present when post-delegation playbook loop ran) */
+  axPlaybook?: AxACEResult;
+  /** L5 Ax: matched playbook entries used to inform delegation */
+  axPlaybookMatches?: PlaybookEntry[];
+  /** L5 Ax: MiPRO compiled prompt if available for this task type */
+  axCompiledPrompt?: CompiledPrompt;
 }
 
 export interface AgentInfo {
@@ -188,6 +215,59 @@ export async function delegateToAgent(
   });
   const routed = sendMessage(hermesMsg);
 
+  // ── L5 Ax: pre-delegation Self-Discover + MiPRO + playbook match ──
+  let axDiscoveryResult: DelegationResult['axDiscovery'];
+  let axPlaybookMatches: PlaybookEntry[] | undefined;
+  let axCompiledPrompt: CompiledPrompt | undefined;
+  let structuredPromptPrefix = '';
+
+  try {
+    // Self-Discover: classify task, compose reasoning structure, get depth override
+    const disc = discover(taskId, agentId, prompt);
+    axDiscoveryResult = {
+      structure: disc.structure,
+      initializer: disc.initializer,
+      depthOverride: disc.depthOverride,
+      cached: disc.cached,
+    };
+    structuredPromptPrefix = disc.prompt;
+
+    logger.info(
+      {
+        taskId,
+        agentId,
+        complexity: disc.structure.complexity,
+        modules: disc.structure.modules.length,
+        depthRounds: disc.depthOverride.rounds,
+        cached: disc.cached,
+      },
+      'L5 Self-Discover: task classified',
+    );
+
+    // MiPRO: check for compiled prompt optimized for this agent/task type
+    const compiled = getCompiledPrompt(agentId);
+    if (compiled) {
+      axCompiledPrompt = compiled;
+      logger.info(
+        { taskId, agentId, promptId: compiled.id },
+        'L5 MiPRO: compiled prompt found',
+      );
+    }
+
+    // AxACE playbook: check for existing strategies matching this task
+    const matches = matchPlaybook(agentId);
+    if (matches.length > 0) {
+      axPlaybookMatches = matches;
+      logger.info(
+        { taskId, agentId, matchCount: matches.length },
+        'L5 AxACE: playbook matches found',
+      );
+    }
+  } catch (axErr) {
+    // L5 failure must never block delegation
+    logger.warn({ taskId, agentId, err: axErr }, 'L5 Ax pre-delegation failed (non-fatal)');
+  }
+
   try {
     // Load agent config to get its system prompt and MCP allowlist
     const agentConfig = loadAgentConfig(agentId);
@@ -211,6 +291,17 @@ export async function delegateToAgent(
     }
     if (memCtx) {
       contextParts.push(memCtx);
+    }
+    // L5 Ax: inject structured reasoning prompt if Self-Discover produced one
+    if (structuredPromptPrefix) {
+      contextParts.push(`[Reasoning Structure]\n${structuredPromptPrefix}\n[End Reasoning Structure]`);
+    }
+    // L5 Ax: inject playbook strategies if matched
+    if (axPlaybookMatches && axPlaybookMatches.length > 0) {
+      const strategies = axPlaybookMatches
+        .map((e) => `- [${e.taskPattern}] (score: ${e.curatorScore.toFixed(2)}): ${e.strategy}`)
+        .join('\n');
+      contextParts.push(`[Proven Strategies]\n${strategies}\n[End Proven Strategies]`);
     }
     // Use routed message text (Hermes may have transformed it)
     contextParts.push(routed.text ?? prompt);
@@ -279,6 +370,28 @@ export async function delegateToAgent(
         logger.warn({ taskId, agentId, err: reflectErr }, 'Auto-reflection failed (non-fatal)');
       }
 
+      // ── L5 Ax: post-delegation AxACE playbook loop ──
+      let axPlaybookResult: AxACEResult | undefined;
+      try {
+        const depthRounds = axDiscoveryResult?.depthOverride.rounds ?? 3;
+        axPlaybookResult = runAxACE(taskId, agentId, depthRounds);
+        if (axPlaybookResult.acceptedEntry) {
+          logger.info(
+            {
+              taskId,
+              agentId,
+              entryId: axPlaybookResult.acceptedEntry.id,
+              score: axPlaybookResult.acceptedEntry.curatorScore,
+              rounds: axPlaybookResult.roundsExecuted,
+            },
+            'L5 AxACE: new playbook entry accepted',
+          );
+        }
+      } catch (aceErr) {
+        // AxACE failure must never break delegation flow
+        logger.warn({ taskId, agentId, err: aceErr }, 'L5 AxACE post-delegation failed (non-fatal)');
+      }
+
       return {
         agentId,
         text: result.text,
@@ -287,6 +400,10 @@ export async function delegateToAgent(
         durationMs,
         hermesMessage: routed,
         reflection: reflectionResult,
+        axDiscovery: axDiscoveryResult,
+        axPlaybook: axPlaybookResult,
+        axPlaybookMatches,
+        axCompiledPrompt,
       };
     } catch (innerErr) {
       clearTimeout(timer);
