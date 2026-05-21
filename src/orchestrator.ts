@@ -6,6 +6,14 @@ import { runAgent, UsageInfo } from './agent.js';
 import { loadAgentConfig, listAgentIds, resolveAgentClaudeMd } from './agent-config.js';
 import { PROJECT_ROOT } from './config.js';
 import { logToHiveMind, createInterAgentTask, completeInterAgentTask } from './db.js';
+import {
+  createTextMessage,
+  sendMessage,
+  receiveMessage,
+  registerAgent,
+  autoReflect,
+} from './hermes/index.js';
+import type { HermesMessage, LatentPayload, AutoReflectionResult } from './hermes/index.js';
 import { logger } from './logger.js';
 import { buildMemoryContext } from './memory.js';
 
@@ -17,6 +25,10 @@ export interface DelegationResult {
   usage: UsageInfo | null;
   taskId: string;
   durationMs: number;
+  /** Hermes message metadata (present when routed through transport) */
+  hermesMessage?: HermesMessage;
+  /** Auto-reflection result (present when Hermes reflection ran post-delegation) */
+  reflection?: AutoReflectionResult;
 }
 
 export interface AgentInfo {
@@ -55,9 +67,20 @@ export function initOrchestrator(): void {
     }
   }
 
+  // Register all agents with Hermes transport (text-only by default).
+  // Agents upgraded with RecursiveMAS adapters will re-register with
+  // latent capabilities when their adapters load.
+  for (const agent of agentRegistry) {
+    registerAgent({
+      agentId: agent.id,
+      accepts: ['text'],
+      produces: ['text'],
+    });
+  }
+
   logger.info(
     { agents: agentRegistry.map((a) => a.id) },
-    'Orchestrator initialized',
+    'Orchestrator initialized (Hermes transport active)',
   );
 }
 
@@ -155,6 +178,16 @@ export async function delegateToAgent(
 
   onProgress?.(`Delegating to ${agent.name}...`);
 
+  // ── Hermes transport: create and route message ──
+  const hermesMsg = createTextMessage({
+    fromAgent,
+    toAgent: agentId,
+    chatId,
+    text: prompt,
+    taskId,
+  });
+  const routed = sendMessage(hermesMsg);
+
   try {
     // Load agent config to get its system prompt and MCP allowlist
     const agentConfig = loadAgentConfig(agentId);
@@ -164,7 +197,7 @@ export async function delegateToAgent(
       try {
         systemPrompt = fs.readFileSync(claudeMdPath, 'utf-8');
       } catch {
-        // No CLAUDE.md for this agent — that's fine
+        // No CLAUDE.md for this agent -- that's fine
       }
     }
 
@@ -174,12 +207,13 @@ export async function delegateToAgent(
     // Build the delegated prompt with agent role context + memory
     const contextParts: string[] = [];
     if (systemPrompt) {
-      contextParts.push(`[Agent role — follow these instructions]\n${systemPrompt}\n[End agent role]`);
+      contextParts.push(`[Agent role -- follow these instructions]\n${systemPrompt}\n[End agent role]`);
     }
     if (memCtx) {
       contextParts.push(memCtx);
     }
-    contextParts.push(prompt);
+    // Use routed message text (Hermes may have transformed it)
+    contextParts.push(routed.text ?? prompt);
     const fullPrompt = contextParts.join('\n\n');
 
     // Create an AbortController with timeout
@@ -200,6 +234,9 @@ export async function delegateToAgent(
 
       clearTimeout(timer);
 
+      // Mark message received on target side
+      receiveMessage(routed);
+
       const durationMs = Date.now() - start;
       completeInterAgentTask(taskId, 'completed', result.text);
       logToHiveMind(
@@ -213,12 +250,43 @@ export async function delegateToAgent(
         `${agent.name} completed (${Math.round(durationMs / 1000)}s)`,
       );
 
+      // ── Hermes auto-reflection: classify task and reflect if warranted ──
+      let reflectionResult: AutoReflectionResult | undefined;
+      try {
+        reflectionResult = autoReflect({
+          taskId,
+          agentId,
+          prompt,
+          writeSkill: true,
+          // Only trigger reflection for standard+ depth tasks to avoid
+          // overhead on simple delegations. Light tasks skip reflection.
+          minDepthToTrigger: 'standard',
+        });
+        if (reflectionResult.triggered) {
+          logger.info(
+            {
+              taskId,
+              agentId,
+              depth: reflectionResult.classification.inferredDepth,
+              converged: reflectionResult.reflection?.reflectionConverged,
+              reason: reflectionResult.reason,
+            },
+            'Post-delegation reflection completed',
+          );
+        }
+      } catch (reflectErr) {
+        // Reflection failure must never break delegation flow
+        logger.warn({ taskId, agentId, err: reflectErr }, 'Auto-reflection failed (non-fatal)');
+      }
+
       return {
         agentId,
         text: result.text,
         usage: result.usage,
         taskId,
         durationMs,
+        hermesMessage: routed,
+        reflection: reflectionResult,
       };
     } catch (innerErr) {
       clearTimeout(timer);
