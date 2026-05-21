@@ -28,6 +28,25 @@ import type {
   PlaybookEntry,
   CompiledPrompt,
 } from './ax/index.js';
+import {
+  runGraphRecursion,
+  getGraphRoundBudget,
+  createLatentPayload as createGitNexusPayload,
+  initAttentionFromAxWarmStart,
+  createUniformAttention,
+} from './gitnexus/latent-bridge.js';
+import type { GraphLatentResult, InboundSignal } from './gitnexus/latent-bridge.js';
+import { getSubgraph, analyzeImpact } from './gitnexus/query.js';
+import { createDriver } from './gitnexus/ingest.js';
+import {
+  runScanRecursion,
+  getScanRoundBudget,
+  computeGateSignal,
+  createBroadcastPayloads,
+  createDeepSecPayload,
+} from './deepsec/latent-bridge.js';
+import type { ScanLatentResult, StructuralSignal, GateSignal } from './deepsec/latent-bridge.js';
+import { scanDirectory } from './deepsec/scanner.js';
 import { logger } from './logger.js';
 import { buildMemoryContext } from './memory.js';
 
@@ -56,6 +75,12 @@ export interface DelegationResult {
   axPlaybookMatches?: PlaybookEntry[];
   /** L5 Ax: MiPRO compiled prompt if available for this task type */
   axCompiledPrompt?: CompiledPrompt;
+  /** L1 GitNexus: structural latent analysis (present when graph available) */
+  graphAnalysis?: GraphLatentResult;
+  /** L2 DeepSec: security scan latent analysis (present when scan ran) */
+  scanAnalysis?: ScanLatentResult;
+  /** L2 DeepSec: gate signal (pass/fail/review) */
+  securityGate?: GateSignal;
 }
 
 export interface AgentInfo {
@@ -268,6 +293,58 @@ export async function delegateToAgent(
     logger.warn({ taskId, agentId, err: axErr }, 'L5 Ax pre-delegation failed (non-fatal)');
   }
 
+  // ── L1 GitNexus: pre-delegation structural latent analysis ──
+  let graphAnalysisResult: GraphLatentResult | undefined;
+  let l1InboundSignals: InboundSignal[] = [];
+
+  try {
+    const driver = createDriver();
+    try {
+      // Get subgraph for the agent's working directory
+      const agentConfig = loadAgentConfig(agentId);
+      const agentRoot = agentConfig.cwd ?? path.join(PROJECT_ROOT, 'agents', agentId);
+      const subgraph = await getSubgraph(driver, agentRoot, 2);
+
+      if (subgraph.nodes.length > 0) {
+        // Get impact data for confidence scoring
+        const impact = await analyzeImpact(driver, agentRoot);
+
+        // Determine round budget from L5 complexity or default
+        const complexity = axDiscoveryResult?.structure.complexity;
+        const maxRounds = getGraphRoundBudget(complexity);
+
+        // Initialize attention: use Ax warm-start if available, else uniform
+        const initialAttention = axDiscoveryResult
+          ? initAttentionFromAxWarmStart(subgraph, axDiscoveryResult.initializer)
+          : createUniformAttention(subgraph);
+
+        graphAnalysisResult = runGraphRecursion({
+          taskId,
+          subgraph,
+          maxRounds,
+          initialAttention,
+          impact,
+        });
+
+        logger.info(
+          {
+            taskId,
+            agentId,
+            rounds: graphAnalysisResult.rounds.length,
+            converged: graphAnalysisResult.converged,
+            confidence: graphAnalysisResult.finalConfidence,
+          },
+          'L1 GitNexus: structural analysis complete',
+        );
+      }
+    } finally {
+      await driver.close();
+    }
+  } catch (l1Err) {
+    // L1 failure must never block delegation (Neo4j may be down)
+    logger.warn({ taskId, agentId, err: l1Err }, 'L1 GitNexus pre-delegation failed (non-fatal)');
+  }
+
   try {
     // Load agent config to get its system prompt and MCP allowlist
     const agentConfig = loadAgentConfig(agentId);
@@ -392,6 +469,72 @@ export async function delegateToAgent(
         logger.warn({ taskId, agentId, err: aceErr }, 'L5 AxACE post-delegation failed (non-fatal)');
       }
 
+      // ── L2 DeepSec: post-delegation security scan latent analysis ──
+      let scanAnalysisResult: ScanLatentResult | undefined;
+      let securityGateResult: GateSignal | undefined;
+
+      try {
+        // Run security scan on agent's working directory
+        const agentConfig2 = loadAgentConfig(agentId);
+        const scanRoot = agentConfig2.cwd ?? path.join(PROJECT_ROOT, 'agents', agentId);
+        const baseScanResult = scanDirectory(scanRoot);
+
+        if (baseScanResult.findings.length > 0) {
+          // Determine round budget
+          const complexity = axDiscoveryResult?.structure.complexity;
+          const hasHighSev = baseScanResult.findings.some(
+            (f) => f.severity === 'critical' || f.severity === 'high',
+          );
+          const maxRounds = getScanRoundBudget(complexity, hasHighSev);
+
+          // Build structural signals from L1 GitNexus if available
+          const structuralSignals: StructuralSignal[] = [];
+          if (graphAnalysisResult) {
+            structuralSignals.push({
+              source: 'gitnexus',
+              signalType: 'graph_structure',
+              hiddenState: graphAnalysisResult.finalState,
+              confidence: graphAnalysisResult.finalConfidence,
+            });
+          }
+
+          scanAnalysisResult = runScanRecursion({
+            taskId,
+            baseScanResult,
+            maxRounds,
+            structuralSignals,
+          });
+
+          // Compute gate signal from final scan state
+          securityGateResult = computeGateSignal(
+            scanAnalysisResult.rounds[scanAnalysisResult.rounds.length - 1],
+            scanAnalysisResult.totalUniqueFindings,
+          );
+
+          // Broadcast to downstream layers (Borg Arc, Borg Queen)
+          const broadcastPayloads = createBroadcastPayloads(
+            scanAnalysisResult.finalState,
+            ['borgarc', 'borgqueen'],
+          );
+
+          logger.info(
+            {
+              taskId,
+              agentId,
+              rounds: scanAnalysisResult.rounds.length,
+              converged: scanAnalysisResult.converged,
+              findings: scanAnalysisResult.totalUniqueFindings,
+              gate: securityGateResult.decision,
+              broadcastTargets: Array.from(broadcastPayloads.keys()),
+            },
+            'L2 DeepSec: security scan analysis complete',
+          );
+        }
+      } catch (l2Err) {
+        // L2 failure must never block delegation
+        logger.warn({ taskId, agentId, err: l2Err }, 'L2 DeepSec post-delegation failed (non-fatal)');
+      }
+
       return {
         agentId,
         text: result.text,
@@ -404,6 +547,9 @@ export async function delegateToAgent(
         axPlaybook: axPlaybookResult,
         axPlaybookMatches,
         axCompiledPrompt,
+        graphAnalysis: graphAnalysisResult,
+        scanAnalysis: scanAnalysisResult,
+        securityGate: securityGateResult,
       };
     } catch (innerErr) {
       clearTimeout(timer);
