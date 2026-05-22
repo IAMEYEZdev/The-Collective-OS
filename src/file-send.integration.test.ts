@@ -13,7 +13,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { extractFileMarkers } from './bot.js';
+import { extractFileMarkers, sendFileMarkers } from './bot.js';
 
 // ── Helper: create a temp file with known content ───────────────────
 function createTempFile(filename: string, content: string): string {
@@ -174,6 +174,102 @@ describe('file sending: mocked Grammy context', () => {
       expect(mockCtx.reply).toHaveBeenCalledTimes(1);
     } finally {
       cleanupTempFile(tmpFile);
+    }
+  });
+});
+
+// ── sendFileMarkers helper: shared upload loop ─────────────────────
+describe('sendFileMarkers (shared helper used by main, delegation, dashboard paths)', () => {
+  function makeMockApi() {
+    return {
+      sendDocument: vi.fn().mockResolvedValue(undefined),
+      sendPhoto: vi.fn().mockResolvedValue(undefined),
+      sendMessage: vi.fn().mockResolvedValue(undefined),
+    };
+  }
+
+  it('uploads document via sendDocument when SEND_FILE marker resolves to existing file', async () => {
+    const tmpFile = createTempFile('agent-output.pdf', 'pdf bytes');
+    try {
+      const api = makeMockApi();
+      const { files } = extractFileMarkers(`Here you go.\n[SEND_FILE:${tmpFile}|Quarterly report]`);
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await sendFileMarkers(api as any, 12345, files);
+
+      expect(api.sendDocument).toHaveBeenCalledTimes(1);
+      const call = api.sendDocument.mock.calls[0];
+      expect(call[0]).toBe(12345);
+      // grammy InputFile instance — we don't unwrap it, just confirm caption opt forwards.
+      expect(call[2]).toEqual({ caption: 'Quarterly report' });
+      expect(api.sendPhoto).not.toHaveBeenCalled();
+    } finally {
+      cleanupTempFile(tmpFile);
+    }
+  });
+
+  it('uploads photo via sendPhoto for SEND_PHOTO marker', async () => {
+    const tmpFile = createTempFile('chart.png', 'png bytes');
+    try {
+      const api = makeMockApi();
+      const { files } = extractFileMarkers(`[SEND_PHOTO:${tmpFile}]`);
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await sendFileMarkers(api as any, 99, files);
+
+      expect(api.sendPhoto).toHaveBeenCalledTimes(1);
+      expect(api.sendPhoto.mock.calls[0][0]).toBe(99);
+      expect(api.sendDocument).not.toHaveBeenCalled();
+    } finally {
+      cleanupTempFile(tmpFile);
+    }
+  });
+
+  it('replies with error when path missing instead of crashing', async () => {
+    const api = makeMockApi();
+    const { files } = extractFileMarkers('[SEND_FILE:/tmp/does-not-exist-xyz.pdf]');
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await sendFileMarkers(api as any, 1, files);
+
+    expect(api.sendDocument).not.toHaveBeenCalled();
+    expect(api.sendMessage).toHaveBeenCalledWith(
+      1,
+      'Could not send file: /tmp/does-not-exist-xyz.pdf (not found)',
+    );
+  });
+
+  it('is a no-op when no markers are present (typical agent reply)', async () => {
+    const api = makeMockApi();
+    const { files } = extractFileMarkers('plain text response, no attachments');
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await sendFileMarkers(api as any, 7, files);
+
+    expect(api.sendDocument).not.toHaveBeenCalled();
+    expect(api.sendPhoto).not.toHaveBeenCalled();
+    expect(api.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('continues sending remaining files after one upload throws', async () => {
+    const tmpA = createTempFile('a.pdf', 'a');
+    const tmpB = createTempFile('b.pdf', 'b');
+    try {
+      const api = makeMockApi();
+      api.sendDocument
+        .mockRejectedValueOnce(new Error('telegram: temporary network glitch'))
+        .mockResolvedValueOnce(undefined);
+
+      const { files } = extractFileMarkers(`[SEND_FILE:${tmpA}]\n[SEND_FILE:${tmpB}]`);
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await sendFileMarkers(api as any, 5, files);
+
+      expect(api.sendDocument).toHaveBeenCalledTimes(2);
+      expect(api.sendMessage).toHaveBeenCalledWith(5, `Failed to send file: ${tmpA}`);
+    } finally {
+      cleanupTempFile(tmpA);
+      cleanupTempFile(tmpB);
     }
   });
 });
