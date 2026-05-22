@@ -67,7 +67,7 @@ export async function buildMemoryContext(
   for (const mem of searched) {
     seen.add(mem.id);
     summaryMap.set(mem.id, mem.summary);
-    const topics = safeParse(mem.topics);
+    const topics = safeParseArray(mem.topics);
     const topicStr = topics.length > 0 ? ` (${topics.join(', ')})` : '';
     memLines.push(`- [${mem.importance.toFixed(1)}] ${mem.summary}${topicStr}`);
   }
@@ -78,7 +78,7 @@ export async function buildMemoryContext(
     if (seen.has(mem.id)) continue;
     seen.add(mem.id);
     summaryMap.set(mem.id, mem.summary);
-    const topics = safeParse(mem.topics);
+    const topics = safeParseArray(mem.topics);
     const topicStr = topics.length > 0 ? ` (${topics.join(', ')})` : '';
     memLines.push(`- [${mem.importance.toFixed(1)}] ${mem.summary}${topicStr}`);
   }
@@ -308,10 +308,18 @@ export function shouldNudgeMemory(chatId: string, agentId = 'main'): boolean {
 
 export const MEMORY_NUDGE_TEXT = '[Memory nudge: It has been a while since anything was saved to long-term memory. If any decisions, preferences, or important facts came up in this conversation, consider mentioning them so they can be remembered.]';
 
-/** Safely parse a JSON array string, returning [] on failure. */
-function safeParse(json: string): string[] {
+/**
+ * Safely parse a JSON string that should be an array of strings.
+ * Returns [] if parsing fails OR if the parsed value is not an array.
+ * This guards against corrupted DB records where topics/entities/connections
+ * contain valid JSON that isn't an array (e.g. null, "string", 42, {}).
+ */
+function safeParseArray(json: unknown): string[] {
+  if (typeof json !== 'string' || !json) return [];
   try {
-    return JSON.parse(json);
+    const parsed: unknown = JSON.parse(json);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((item): item is string => typeof item === 'string');
   } catch {
     return [];
   }

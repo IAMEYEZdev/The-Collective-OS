@@ -12,17 +12,39 @@ import { readEnvFile } from './env.js';
 
 const execFileAsync = promisify(execFile);
 
-// Cache ffmpeg availability check (only needs to run once)
-let _ffmpegAvailable: boolean | null = null;
-async function hasFfmpeg(): Promise<boolean> {
-  if (_ffmpegAvailable !== null) return _ffmpegAvailable;
-  try {
-    await execFileAsync('ffmpeg', ['-version']);
-    _ffmpegAvailable = true;
-  } catch {
-    _ffmpegAvailable = false;
+// Cache ffmpeg path resolution (only needs to run once)
+let _ffmpegPath: string | null = null;
+let _ffmpegChecked = false;
+
+function getFfmpegPath(): string {
+  if (_ffmpegChecked) return _ffmpegPath || 'ffmpeg';
+  // Check common Windows install locations as fallback
+  const candidates = ['ffmpeg', 'C:\\ffmpeg\\ffmpeg.exe'];
+  for (const candidate of candidates) {
+    try {
+      require('child_process').execFileSync(candidate, ['-version'], { stdio: 'ignore' });
+      _ffmpegPath = candidate;
+      _ffmpegChecked = true;
+      return candidate;
+    } catch {
+      // try next
+    }
   }
-  return _ffmpegAvailable;
+  _ffmpegChecked = true;
+  return 'ffmpeg'; // will fail but lets error propagate naturally
+}
+
+async function hasFfmpeg(): Promise<boolean> {
+  if (_ffmpegChecked) return _ffmpegPath !== null;
+  try {
+    const ffmpeg = getFfmpegPath();
+    await execFileAsync(ffmpeg, ['-version']);
+    return true;
+  } catch {
+    _ffmpegChecked = true;
+    _ffmpegPath = null;
+    return false;
+  }
 }
 
 // ── Upload directory ────────────────────────────────────────────────────────
@@ -236,7 +258,7 @@ async function transcribeAudioLocal(filePath: string): Promise<string> {
 
   // whisper-cpp needs WAV input — convert from ogg/mp3/etc.
   const wavPath = filePath.replace(/\.[^.]+$/, '.wav');
-  await execFileAsync('ffmpeg', ['-i', filePath, '-ar', '16000', '-ac', '1', '-y', wavPath]);
+  await execFileAsync(getFfmpegPath(), ['-i', filePath, '-ar', '16000', '-ac', '1', '-y', wavPath]);
 
   try {
     const { stdout } = await execFileAsync(whisperPath, [
@@ -347,6 +369,78 @@ async function synthesizeSpeechGradium(text: string): Promise<Buffer> {
   );
 }
 
+// ── TTS: XTTS v2 (local voice cloning server) ────────────────────────────────
+
+/**
+ * Convert text to speech using a local XTTS v2 server.
+ * Server returns WAV audio which we convert to OGG Opus via ffmpeg.
+ * Provides Melanie's cloned voice from reference sample.
+ */
+async function synthesizeSpeechXTTS(text: string): Promise<Buffer> {
+  const env = readEnvFile(['XTTS_URL']);
+  const baseUrl = env.XTTS_URL || 'http://127.0.0.1:8787';
+
+  const payload = JSON.stringify({
+    input: text,
+    response_format: 'wav',
+  });
+
+  const url = new URL('/v1/audio/speech', baseUrl);
+
+  // XTTS is slow on CPU (~10-80s) so use a generous timeout
+  const wavBuf: Buffer = await new Promise((resolve, reject) => {
+    const protocol = url.protocol === 'https:' ? https : http;
+    const req = protocol.request(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(payload).toString(),
+      },
+      timeout: 300_000, // 5 min timeout for long texts
+    }, (res: import('http').IncomingMessage) => {
+      const chunks: Buffer[] = [];
+      res.on('data', (chunk: Buffer) => chunks.push(chunk));
+      res.on('end', () => {
+        const buf = Buffer.concat(chunks);
+        if (res.statusCode && res.statusCode >= 400) {
+          reject(new Error(`XTTS HTTP ${res.statusCode}: ${buf.toString('utf-8').slice(0, 300)}`));
+          return;
+        }
+        resolve(buf);
+      });
+      res.on('error', reject);
+    });
+    req.on('error', reject);
+    req.on('timeout', () => { req.destroy(); reject(new Error('XTTS request timeout')); });
+    req.write(payload);
+    req.end();
+  });
+
+  // Convert WAV to OGG Opus for Telegram voice notes
+  if (await hasFfmpeg()) {
+    const tmpWav = path.join(UPLOADS_DIR, `xtts-${crypto.randomUUID()}.wav`);
+    const tmpOgg = tmpWav.replace('.wav', '.ogg');
+    try {
+      fs.writeFileSync(tmpWav, wavBuf);
+      await execFileAsync(getFfmpegPath(), [
+        '-i', tmpWav,
+        '-c:a', 'libopus',
+        '-b:a', '48k',
+        '-y',
+        tmpOgg,
+      ]);
+      return fs.readFileSync(tmpOgg);
+    } finally {
+      try { fs.unlinkSync(tmpWav); } catch { /* ignore */ }
+      try { fs.unlinkSync(tmpOgg); } catch { /* ignore */ }
+    }
+  }
+
+  // No ffmpeg - return raw WAV (Telegram may not play as voice note)
+  logger.warn('ffmpeg not available, returning raw WAV from XTTS');
+  return wavBuf;
+}
+
 // ── TTS: Local OpenAI-compatible (Kokoro) ────────────────────────────────────
 
 /**
@@ -420,7 +514,7 @@ export async function synthesizeSpeechLocal(text: string): Promise<Buffer> {
 
   try {
     await execFileAsync('/usr/bin/say', ['-v', voice, '-o', aiffPath, text]);
-    await execFileAsync('ffmpeg', [
+    await execFileAsync(getFfmpegPath(), [
       '-i', aiffPath,
       '-c:a', 'libopus',
       '-b:a', '48k',
@@ -444,6 +538,7 @@ export async function synthesizeSpeech(text: string): Promise<Buffer> {
   const env = readEnvFile([
     'ELEVENLABS_API_KEY', 'ELEVENLABS_VOICE_ID',
     'GRADIUM_API_KEY', 'GRADIUM_VOICE_ID',
+    'XTTS_URL',
     'KOKORO_URL',
   ]);
 
@@ -463,6 +558,15 @@ export async function synthesizeSpeech(text: string): Promise<Buffer> {
       return await synthesizeSpeechGradium(text);
     } catch (err) {
       logger.warn({ err }, 'Gradium TTS failed, trying next provider');
+    }
+  }
+
+  // XTTS v2 - local voice cloning server (Melanie's voice)
+  if (env.XTTS_URL) {
+    try {
+      return await synthesizeSpeechXTTS(text);
+    } catch (err) {
+      logger.warn({ err }, 'XTTS TTS failed, trying next provider');
     }
   }
 
@@ -490,6 +594,7 @@ export function voiceCapabilities(): { stt: boolean; tts: boolean } {
     'WHISPER_MODEL_PATH',
     'ELEVENLABS_API_KEY', 'ELEVENLABS_VOICE_ID',
     'GRADIUM_API_KEY', 'GRADIUM_VOICE_ID',
+    'XTTS_URL',
     'KOKORO_URL',
   ]);
 
@@ -497,6 +602,7 @@ export function voiceCapabilities(): { stt: boolean; tts: boolean } {
     stt: !!env.GROQ_API_KEY || !!env.WHISPER_MODEL_PATH,
     tts: !!(env.ELEVENLABS_API_KEY && env.ELEVENLABS_VOICE_ID)
       || !!(env.GRADIUM_API_KEY && env.GRADIUM_VOICE_ID)
+      || !!env.XTTS_URL
       || !!env.KOKORO_URL
       || process.platform === 'darwin',
   };

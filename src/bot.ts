@@ -30,6 +30,7 @@ import {
   HOURLY_TOKEN_BUDGET,
   PROJECT_ROOT,
   AGENT_MAX_TURNS,
+  AUTO_CHECKPOINT_TURNS,
 } from './config.js';
 import { clearSession, getRecentConversation, getRecentMemories, getRecentTaskOutputs, getSession, getSessionConversation, logToHiveMind, pinMemory, unpinMemory, setSession, lookupWaChatId, saveWaMessageMap, saveTokenUsage, saveCompactionEvent, getCompactionCount } from './db.js';
 import { logger } from './logger.js';
@@ -60,6 +61,10 @@ import {
 // ── Streaming rate limiter ───────────────────────────────────────────
 const globalStreamLastEdit = new Map<string, number>();
 const GLOBAL_STREAM_INTERVAL_MS = 2500;
+
+// ── Per-session conversation turn counter (for auto-checkpoint) ──────
+// Keyed by `${chatId}:${agentId}`. Reset on /newchat or auto-checkpoint.
+const sessionTurnCount = new Map<string, number>();
 
 // ── Context window tracking ──────────────────────────────────────────
 // Uses input_tokens from the last API call (= actual context window size:
@@ -303,6 +308,44 @@ export function extractFileMarkers(text: string): ExtractResult {
 }
 
 /**
+ * Send the files described by a list of FileMarkers to a Telegram chat.
+ * Each file is uploaded as a Telegram document or photo (tappable attachment).
+ * Missing files produce a reply explaining the failure rather than throwing.
+ *
+ * Used by every code path that relays an agent response to Telegram so file
+ * markers from delegated agents and the dashboard relay get attached, not
+ * leaked as text.
+ */
+export async function sendFileMarkers(
+  api: Api<RawApi>,
+  chatId: number,
+  files: FileMarker[],
+): Promise<void> {
+  for (const file of files) {
+    try {
+      if (!fs.existsSync(file.filePath)) {
+        await api.sendMessage(chatId, `Could not send file: ${file.filePath} (not found)`);
+        continue;
+      }
+      const input = new InputFile(file.filePath);
+      const opts = file.caption ? { caption: file.caption } : undefined;
+      if (file.type === 'photo') {
+        await api.sendPhoto(chatId, input, opts);
+      } else {
+        await api.sendDocument(chatId, input, opts);
+      }
+    } catch (fileErr) {
+      logger.error({ err: fileErr, filePath: file.filePath }, 'Failed to send file via Telegram');
+      try {
+        await api.sendMessage(chatId, `Failed to send file: ${file.filePath}`);
+      } catch {
+        // best-effort
+      }
+    }
+  }
+}
+
+/**
  * Send a Telegram typing action. Silently ignores errors (e.g. bot was blocked).
  */
 async function sendTyping(api: Api<RawApi>, chatId: number): Promise<void> {
@@ -455,7 +498,13 @@ async function handleMessage(ctx: Context, message: string, forceVoiceReply = fa
       }
       emitChatEvent({ type: 'assistant_message', chatId: chatIdStr, content: response, source: 'telegram' });
 
-      for (const part of splitMessage(formatForTelegram(`${header}\n\n${response}`))) {
+      // Strip [SEND_FILE:...]/[SEND_PHOTO:...] markers from delegated agent output
+      // and upload referenced files as real Telegram attachments.
+      const { text: delegationText, files: delegationFiles } = extractFileMarkers(response);
+      await sendFileMarkers(ctx.api, chatId, delegationFiles);
+
+      const relayText = delegationText ? `${header}\n\n${delegationText}` : header;
+      for (const part of splitMessage(formatForTelegram(relayText))) {
         await ctx.reply(part, { parse_mode: 'HTML' });
       }
     } catch (err) {
@@ -472,7 +521,21 @@ async function handleMessage(ctx: Context, message: string, forceVoiceReply = fa
   const sessionId = getSession(chatIdStr, AGENT_ID);
 
   // Build memory context and prepend to message
-  const { contextText: memCtx, surfacedMemoryIds, surfacedMemorySummaries } = await buildMemoryContext(chatIdStr, message, AGENT_ID);
+  // Error wall: memory failures must never crash the agent. Degrade gracefully.
+  let memCtx = '';
+  let surfacedMemoryIds: number[] = [];
+  let surfacedMemorySummaries = new Map<number, string>();
+  try {
+    const memResult = await buildMemoryContext(chatIdStr, message, AGENT_ID);
+    memCtx = memResult.contextText;
+    surfacedMemoryIds = memResult.surfacedMemoryIds;
+    surfacedMemorySummaries = memResult.surfacedMemorySummaries;
+  } catch (err) {
+    logger.error({ err, chatId: chatIdStr }, 'buildMemoryContext crashed — continuing without memory context');
+    // Layer 6: Self-alert DM on critical exception
+    const errMsg = err instanceof Error ? err.message : String(err);
+    ctx.reply(`⚠️ Memory subsystem crashed (degraded mode active):\n${errMsg.slice(0, 200)}\n\nResponding without memory context.`).catch(() => {});
+  }
   const parts: string[] = [];
   if (agentSystemPrompt && !sessionId) parts.push(`[Agent role — follow these instructions]\n${agentSystemPrompt}\n[End agent role]`);
   if (memCtx) parts.push(memCtx);
@@ -702,24 +765,8 @@ async function handleMessage(ctx: Context, message: string, forceVoiceReply = fa
     // Emit assistant response to SSE clients
     emitChatEvent({ type: 'assistant_message', chatId: chatIdStr, content: rawResponse, source: 'telegram' });
 
-    // Send any attached files first
-    for (const file of fileMarkers) {
-      try {
-        if (!fs.existsSync(file.filePath)) {
-          await ctx.reply(`Could not send file: ${file.filePath} (not found)`);
-          continue;
-        }
-        const input = new InputFile(file.filePath);
-        if (file.type === 'photo') {
-          await ctx.replyWithPhoto(input, file.caption ? { caption: file.caption } : undefined);
-        } else {
-          await ctx.replyWithDocument(input, file.caption ? { caption: file.caption } : undefined);
-        }
-      } catch (fileErr) {
-        logger.error({ err: fileErr, filePath: file.filePath }, 'Failed to send file via Telegram');
-        await ctx.reply(`Failed to send file: ${file.filePath}`);
-      }
-    }
+    // Send any attached files first (uploaded as tappable Telegram documents/photos)
+    await sendFileMarkers(ctx.api, chatId, fileMarkers);
 
     // Voice response: send audio if user sent a voice note (forceVoiceReply)
     // OR if they've toggled /voice on for text messages.
@@ -792,6 +839,61 @@ async function handleMessage(ctx: Context, message: string, forceVoiceReply = fa
       const rateStatus = getRateStatus(DAILY_COST_BUDGET, HOURLY_TOKEN_BUDGET);
       for (const rateWarning of rateStatus.warnings) {
         await ctx.reply(rateWarning);
+      }
+    }
+
+    // ── Auto-checkpoint at turn threshold ────────────────────────────
+    // Tracks conversation turns (user messages) per session. When the
+    // threshold is reached, auto-saves a checkpoint memory and clears
+    // the session — same effect as manual "checkpoint" + /newchat.
+    if (AUTO_CHECKPOINT_TURNS > 0 && !skipLog) {
+      const turnKey = `${chatIdStr}:${AGENT_ID}`;
+      const turns = (sessionTurnCount.get(turnKey) ?? 0) + 1;
+      sessionTurnCount.set(turnKey, turns);
+
+      if (turns >= AUTO_CHECKPOINT_TURNS) {
+        const activeSessionId = result.newSessionId ?? sessionId;
+        logger.info({ turns, chatId: chatIdStr, agentId: AGENT_ID }, 'Auto-checkpoint triggered at turn threshold');
+
+        // Fire-and-forget: summarize + checkpoint + clear session
+        (async () => {
+          try {
+            // Ask agent to produce a checkpoint summary
+            if (activeSessionId) {
+              const cpAbort = new AbortController();
+              const cpTimer = setTimeout(() => cpAbort.abort(), 60_000);
+
+              const cpResult = await runAgent(
+                'Summarize what we accomplished this session in 3-5 bullet points (under 300 chars total). No preamble, no quotes, just bullets. This is for a checkpoint before auto-newchat at turn ' + turns + '.',
+                activeSessionId,
+                () => {},
+                undefined,
+                undefined,
+                cpAbort,
+              );
+              clearTimeout(cpTimer);
+
+              const summary = cpResult.text?.trim();
+              if (summary && summary.length > 0) {
+                logToHiveMind(AGENT_ID, chatIdStr, 'auto_checkpoint', `[Turn ${turns}] ${summary.slice(0, 500)}`);
+              } else {
+                logToHiveMind(AGENT_ID, chatIdStr, 'auto_checkpoint', `[Turn ${turns}] Auto-checkpoint (no summary produced)`);
+              }
+            }
+          } catch (cpErr) {
+            logToHiveMind(AGENT_ID, chatIdStr, 'auto_checkpoint', `[Turn ${turns}] Auto-checkpoint (summary failed)`);
+            logger.error({ err: cpErr }, 'Auto-checkpoint summary failed');
+          }
+
+          // Flush ingestion buffer and clear session
+          void flushIngestionBuffer().catch((err) => logger.warn({ err }, 'Buffer flush on auto-checkpoint failed'));
+          clearSession(chatIdStr, AGENT_ID);
+          sessionBaseline.delete(activeSessionId ?? chatIdStr);
+          sessionTurnCount.delete(turnKey);
+        })();
+
+        // Notify user
+        await ctx.reply(`🔄 Auto-checkpoint at turn ${turns}. Session saved and cleared. Next message starts fresh.`);
       }
     }
 
@@ -1026,6 +1128,7 @@ export function createBot(): Bot {
 
     clearSession(chatIdStr, AGENT_ID);
     sessionBaseline.delete(chatIdStr);
+    sessionTurnCount.delete(`${chatIdStr}:${AGENT_ID}`);
     await ctx.reply('Session cleared. Starting fresh.');
     logger.info({ chatId: ctx.chat!.id }, 'Session cleared by user');
   });
@@ -1663,7 +1766,20 @@ async function processDashboardMessage(
   try {
     const sessionId = getSession(chatIdStr, AGENT_ID);
 
-    const { contextText: memCtx, surfacedMemoryIds: dashSurfacedIds, surfacedMemorySummaries: dashSummaries } = await buildMemoryContext(chatIdStr, text, AGENT_ID);
+    // Error wall: memory failures must never crash the dashboard handler
+    let memCtx = '';
+    let dashSurfacedIds: number[] = [];
+    let dashSummaries = new Map<number, string>();
+    try {
+      const memResult = await buildMemoryContext(chatIdStr, text, AGENT_ID);
+      memCtx = memResult.contextText;
+      dashSurfacedIds = memResult.surfacedMemoryIds;
+      dashSummaries = memResult.surfacedMemorySummaries;
+    } catch (err) {
+      logger.error({ err, chatId: chatIdStr }, 'buildMemoryContext crashed in dashboard handler — continuing without memory');
+      const errMsg = err instanceof Error ? err.message : String(err);
+      emitChatEvent({ type: 'assistant_message', chatId: chatIdStr, content: `⚠️ Memory subsystem crashed (degraded mode): ${errMsg.slice(0, 200)}`, source: 'dashboard' });
+    }
     const dashParts: string[] = [];
     if (agentSystemPrompt && !sessionId) dashParts.push(`[Agent role — follow these instructions]\n${agentSystemPrompt}\n[End agent role]`);
     if (memCtx) dashParts.push(memCtx);
@@ -1750,8 +1866,12 @@ async function processDashboardMessage(
     // Emit assistant response to SSE clients
     emitChatEvent({ type: 'assistant_message', chatId: chatIdStr, content: rawResponse, source: 'dashboard' });
 
-    // Relay to Telegram so the user sees it there too
-    const { text: responseText } = extractFileMarkers(rawResponse);
+    // Relay to Telegram so the user sees it there too. Strip any
+    // [SEND_FILE:...]/[SEND_PHOTO:...] markers and upload the referenced
+    // files as real Telegram attachments rather than leaking the path
+    // as text.
+    const { text: responseText, files: dashboardFiles } = extractFileMarkers(rawResponse);
+    await sendFileMarkers(botApi, parseInt(chatIdStr), dashboardFiles);
     if (responseText) {
       for (const part of splitMessage(formatForTelegram(responseText))) {
         await botApi.sendMessage(parseInt(chatIdStr), part, { parse_mode: 'HTML' });

@@ -196,13 +196,19 @@ export async function ingestConversationTurn(
     // The 0.3-0.4 tier was almost entirely noise (task logs, form steps).
     if (result.importance < 0.5) return false;
 
+    // Write-path validation: sanitize topics and entities before they reach SQLite.
+    // Gemini can return anything — strings, numbers, nested objects.
+    // Corrupted topics caused a 6-hour fleet outage (2026-05-18 incident).
+    const sanitizedTopics = sanitizeStringArray(result.topics);
+    const sanitizedEntities = sanitizeStringArray(result.entities);
+
     // Clamp importance to valid range
     const importance = Math.max(0, Math.min(1, result.importance));
 
     // Generate embedding early so we can check for duplicates before saving
     let embedding: number[] = [];
     try {
-      const embeddingText = `${result.summary} ${(result.entities ?? []).join(' ')} ${(result.topics ?? []).join(' ')}`;
+      const embeddingText = `${result.summary} ${sanitizedEntities.join(' ')} ${sanitizedTopics.join(' ')}`;
       embedding = await embedText(embeddingText);
     } catch (embErr) {
       logger.warn({ err: embErr }, 'Failed to generate embedding for duplicate check');
@@ -227,8 +233,8 @@ export async function ingestConversationTurn(
       chatId,
       userMessage,
       result.summary,
-      result.entities ?? [],
-      result.topics ?? [],
+      sanitizedEntities,
+      sanitizedTopics,
       importance,
       embedding,
       'conversation',
@@ -303,4 +309,16 @@ export function isTrivialMessage(message: string): boolean {
   if (TRIVIAL_SINGLE_EMOJIS.includes(trimmed)) return true;
 
   return false;
+}
+
+// ── Write-path sanitization ──────────────────────────────────────────
+// Ensures only clean string arrays reach SQLite. Prevents the class of
+// crash where Gemini returns a non-array (string, null, number, object)
+// that passes JSON.stringify but breaks on read.
+
+function sanitizeStringArray(input: unknown): string[] {
+  if (!Array.isArray(input)) return [];
+  return input
+    .filter((item): item is string => typeof item === 'string' && item.length > 0)
+    .map((s) => s.slice(0, 200)); // cap individual values to prevent bloat
 }

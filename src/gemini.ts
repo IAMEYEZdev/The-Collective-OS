@@ -140,7 +140,7 @@ async function callGemini(
 
 /**
  * Generate text content via Gemini.
- * Defaults to gemini-2.0-flash for speed and cost efficiency.
+ * Defaults to gemini-2.5-flash for speed and cost efficiency.
  *
  * Includes a rate limiter to avoid exhausting the free-tier quota,
  * which would block the War Room's Gemini Live connection.
@@ -153,7 +153,7 @@ async function callGemini(
  */
 export async function generateContent(
   prompt: string,
-  model = 'gemini-2.0-flash',
+  model = 'gemini-2.5-flash',
   priority: 'normal' | 'high' = 'normal',
 ): Promise<string> {
   // Rate limit non-critical calls (memory ingestion, consolidation)

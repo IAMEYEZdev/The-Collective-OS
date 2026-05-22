@@ -355,6 +355,26 @@ function createSchema(database: Database.Database): void {
       total_cost  REAL NOT NULL DEFAULT 0,
       created_at  INTEGER NOT NULL DEFAULT (strftime('%s','now'))
     );
+
+    -- Agentic Perfecting: knowledge packets awaiting assimilation
+    CREATE TABLE IF NOT EXISTS pending_uplift (
+      id              TEXT PRIMARY KEY,
+      transcript_id   TEXT NOT NULL,
+      source_date     TEXT NOT NULL,
+      domain          TEXT NOT NULL,
+      title           TEXT NOT NULL,
+      content         TEXT NOT NULL,
+      skill_candidate INTEGER NOT NULL DEFAULT 0,
+      status          TEXT NOT NULL DEFAULT 'pending',
+      vault_note      TEXT,
+      business_tags   TEXT,
+      promotion_watch INTEGER NOT NULL DEFAULT 0,
+      created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+      assimilated_at  TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_pending_uplift_status ON pending_uplift(status);
+    CREATE INDEX IF NOT EXISTS idx_pending_uplift_business ON pending_uplift(business_tags);
+    CREATE INDEX IF NOT EXISTS idx_pending_uplift_created ON pending_uplift(created_at);
   `);
 }
 
@@ -619,6 +639,17 @@ function runMigrations(database: Database.Database): void {
   if (meetCols.length > 0 && !meetCols.some((c) => c.name === 'provider')) {
     database.exec(`ALTER TABLE meet_sessions ADD COLUMN provider TEXT NOT NULL DEFAULT 'pika'`);
     logger.info('Migration: added provider column to meet_sessions');
+  }
+
+  // Agentic Perfecting: add business_tags + promotion_watch to pending_uplift
+  const upliftCols = database.prepare(`PRAGMA table_info(pending_uplift)`).all() as Array<{ name: string }>;
+  if (upliftCols.length > 0 && !upliftCols.some((c) => c.name === 'business_tags')) {
+    database.exec(`ALTER TABLE pending_uplift ADD COLUMN business_tags TEXT`);
+    logger.info('Migration: added business_tags column to pending_uplift');
+  }
+  if (upliftCols.length > 0 && !upliftCols.some((c) => c.name === 'promotion_watch')) {
+    database.exec(`ALTER TABLE pending_uplift ADD COLUMN promotion_watch INTEGER NOT NULL DEFAULT 0`);
+    logger.info('Migration: added promotion_watch column to pending_uplift');
   }
 }
 

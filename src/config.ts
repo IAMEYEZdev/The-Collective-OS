@@ -37,6 +37,7 @@ const envConfig = readEnvFile([
   'WARROOM_ENABLED',
   'WARROOM_PORT',
   'STREAM_STRATEGY',
+  'AUTO_CHECKPOINT_TURNS',
 ]);
 
 // ── Multi-agent support ──────────────────────────────────────────────
@@ -140,6 +141,14 @@ export const AGENT_TIMEOUT_MS = parseInt(
 // Default: 30 turns, which is generous for complex skills but stops spirals.
 export const AGENT_MAX_TURNS = parseInt(
   process.env.AGENT_MAX_TURNS || envConfig.AGENT_MAX_TURNS || '30',
+  10,
+);
+
+// Auto-checkpoint + newchat after N conversation turns (user messages).
+// Prevents context degradation on long-running sessions across all agents.
+// 0 = disabled. Default: 60.
+export const AUTO_CHECKPOINT_TURNS = parseInt(
+  process.env.AUTO_CHECKPOINT_TURNS || envConfig.AUTO_CHECKPOINT_TURNS || '60',
   10,
 );
 
