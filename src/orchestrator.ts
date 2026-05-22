@@ -12,8 +12,10 @@ import {
   receiveMessage,
   registerAgent,
   autoReflect,
+  computeCorrelations,
+  executeAllFeedbackActions,
 } from './hermes/index.js';
-import type { HermesMessage, LatentPayload, AutoReflectionResult } from './hermes/index.js';
+import type { HermesMessage, LatentPayload, AutoReflectionResult, CorrelationResult, FeedbackExecutionResult } from './hermes/index.js';
 import {
   discover,
   matchPlaybook,
@@ -481,6 +483,30 @@ export async function delegateToAgent(
         logger.warn({ taskId, agentId, err: reflectErr }, 'Auto-reflection failed (non-fatal)');
       }
 
+      // ── L4 Cross-Agent Correlation: execute inject_feedback if reflection recommends it ──
+      let crossAgentCorrelation: CorrelationResult | undefined;
+      let feedbackResults: FeedbackExecutionResult[] = [];
+      try {
+        if (reflectionResult?.triggered && reflectionResult.reflection?.finalActions) {
+          const feedbackActions = reflectionResult.reflection.finalActions.filter(
+            (a) => a.type === 'inject_feedback',
+          );
+          if (feedbackActions.length > 0) {
+            crossAgentCorrelation = computeCorrelations(taskId);
+            feedbackResults = executeAllFeedbackActions(taskId, feedbackActions);
+            const succeeded = feedbackResults.filter((r) => r.success).length;
+            if (succeeded > 0) {
+              logger.info(
+                { taskId, agentId, total: feedbackActions.length, succeeded },
+                'Cross-agent feedback injected',
+              );
+            }
+          }
+        }
+      } catch (corrErr) {
+        logger.warn({ taskId, agentId, err: corrErr }, 'Cross-agent correlation failed (non-fatal)');
+      }
+
       // ── L5 Ax: post-delegation AxACE playbook loop ──
       let axPlaybookResult: AxACEResult | undefined;
       try {
@@ -657,6 +683,8 @@ export async function delegateToAgent(
         borgArcReport: borgArcReportResult,
         borgQueenCluster: borgQueenClusterResult,
         capabilityGaps: capabilityGapsResult,
+        crossAgentCorrelation,
+        feedbackResults,
       };
     } catch (innerErr) {
       clearTimeout(timer);

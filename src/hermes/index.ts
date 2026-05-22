@@ -105,6 +105,22 @@ export {
   skillFileSimilarity,
 } from './skill-file.js';
 
+// Re-export cross-agent correlation (Step 7)
+export type {
+  AgentCorrelation,
+  ConvergenceCluster,
+  CorrelationResult,
+  PerturbationVector,
+  FeedbackExecutionResult,
+} from './cross-agent.js';
+
+export {
+  computeCorrelations,
+  generatePerturbation,
+  executeFeedbackAction,
+  executeAllFeedbackActions,
+} from './cross-agent.js';
+
 // Re-export depth mapping
 export type {
   TaskSignals,
@@ -128,6 +144,7 @@ import { LATENT_DIM } from './types.js';
 import { REFLECTION_ROUNDS, inferReflectionDepth, analyzeTraces, runReflection, summarizeForSkillFile } from './reflective-phase.js';
 import { writeSkillFile, readSkillFile, readSkillFileText, readSkillFileLatent, listSkillFiles, deleteSkillFile, findSkillFiles, skillFileSimilarity } from './skill-file.js';
 import { classifyTask, autoReflect, batchClassify } from './depth-map.js';
+import { computeCorrelations, generatePerturbation, executeFeedbackAction, executeAllFeedbackActions } from './cross-agent.js';
 
 /** Namespace object for convenience imports. */
 export const hermes = {
@@ -181,4 +198,10 @@ export const hermes = {
   classifyTask,
   autoReflect,
   batchClassify,
+
+  // Cross-Agent Correlation (Step 7)
+  computeCorrelations,
+  generatePerturbation,
+  executeFeedbackAction,
+  executeAllFeedbackActions,
 } as const;
