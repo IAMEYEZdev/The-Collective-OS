@@ -53,6 +53,14 @@ Hardcoded in `src/mcp-watchdog.ts → MCP_WAKEUP_REGISTRY`. Currently:
 'basic-memory': {
   command: process.env.MCP_BASIC_MEMORY_UVX || 'C:\\Users\\windows\\.local\\bin\\uvx.exe',
   args: ['--from', 'basic-memory', 'basic-memory', '--version'],
+},
+'apify': {
+  command: process.env.MCP_APIFY_NPX || 'npx',
+  args: ['@apify/actors-mcp-server', '--help'],
+},
+'graphiti': {
+  command: process.env.MCP_GRAPHITI_UV || 'C:\\Users\\windows\\.local\\bin\\uv.exe',
+  args: ['run', '--directory', '<graphiti-mcp-dir>', 'main.py', '--help'],
 }
 ```
 
@@ -60,12 +68,27 @@ To add a new server, append a new entry. Keep the wake-up brief and
 side-effect-free (a `--version` or `--help` call is ideal). Do **not**
 use the server's main launch command — Claude Code will reconnect itself.
 
+### Cycle logging
+
+The watchdog maintains a rolling buffer of the last 100 MCP lifecycle
+events (disconnect, wakeup_triggered, wakeup_success, wakeup_failed).
+This enables pattern detection:
+
+- `getCycleLog(serverName?)` — returns recent events, newest-first
+- `isRapidCycling(serverName, windowMs?, threshold?)` — returns true
+  if ≥5 disconnects occurred within 5 minutes (defaults)
+- Rapid cycling triggers a warning log but does NOT block recovery
+  attempts — a broken watchdog must never prevent work
+
 ### Tunables (env vars)
 
 | Var | Default | Hard cap | Purpose |
 |---|---|---|---|
 | `MCP_WATCHDOG_MAX_RETRIES` | `1` | `3` | How many recovery attempts per disconnect cascade |
 | `MCP_BASIC_MEMORY_UVX` | `C:\Users\windows\.local\bin\uvx.exe` | — | Override the basic-memory wake-up executable path |
+| `MCP_APIFY_NPX` | `npx` | — | Override the apify wake-up executable path |
+| `MCP_GRAPHITI_UV` | `C:\Users\windows\.local\bin\uv.exe` | — | Override the graphiti wake-up executable path |
+| `MCP_GRAPHITI_DIR` | `C:\Users\windows\graphiti\mcp_server` | — | Override the graphiti MCP server directory |
 
 ### Constants in `src/mcp-watchdog.ts`
 

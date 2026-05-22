@@ -54,6 +54,18 @@ export const MCP_WAKEUP_REGISTRY: Record<string, McpWakeupConfig> = {
       'C:\\Users\\windows\\.local\\bin\\uvx.exe',
     args: ['--from', 'basic-memory', 'basic-memory', '--version'],
   },
+  'apify': {
+    command: process.env.MCP_APIFY_NPX || 'npx',
+    args: ['@apify/actors-mcp-server', '--help'],
+  },
+  'graphiti': {
+    command:
+      process.env.MCP_GRAPHITI_UV ||
+      'C:\\Users\\windows\\.local\\bin\\uv.exe',
+    args: ['run', '--directory',
+      process.env.MCP_GRAPHITI_DIR || 'C:\\Users\\windows\\graphiti\\mcp_server',
+      'main.py', '--help'],
+  },
 };
 
 // ── Tunables ──────────────────────────────────────────────────────────
@@ -73,6 +85,70 @@ export const MCP_RETRY_HARD_CAP = Math.min(
 
 /** Internal: per-server timestamp of last wake-up trigger, for dedup. */
 const lastWakeup: Map<string, number> = new Map();
+
+// ── Cycle Logger ─────────────────────────────────────────────────────
+
+export interface McpCycleEvent {
+  server: string;
+  event: 'disconnect' | 'wakeup_triggered' | 'wakeup_success' | 'wakeup_failed';
+  timestamp: number;
+}
+
+/** Rolling buffer of recent MCP cycle events for pattern analysis. */
+const cycleLog: McpCycleEvent[] = [];
+const CYCLE_LOG_MAX = 100;
+
+/**
+ * Record an MCP lifecycle event. Maintains a rolling buffer of the last
+ * CYCLE_LOG_MAX events. Used to detect rapid cycling patterns and provide
+ * diagnostics when asked.
+ */
+export function logCycleEvent(
+  server: string,
+  event: McpCycleEvent['event'],
+): void {
+  const entry: McpCycleEvent = { server, event, timestamp: Date.now() };
+  cycleLog.push(entry);
+  if (cycleLog.length > CYCLE_LOG_MAX) {
+    cycleLog.splice(0, cycleLog.length - CYCLE_LOG_MAX);
+  }
+  logger.info(
+    { server, event, cycleLogSize: cycleLog.length },
+    'MCP watchdog: cycle event logged',
+  );
+}
+
+/**
+ * Return recent cycle events, optionally filtered by server name.
+ * Returns newest-first.
+ */
+export function getCycleLog(serverName?: string): McpCycleEvent[] {
+  const filtered = serverName
+    ? cycleLog.filter((e) => e.server === serverName)
+    : [...cycleLog];
+  return filtered.reverse();
+}
+
+/**
+ * Detect rapid cycling: returns true if a server has had >= `threshold`
+ * disconnect events within `windowMs`. Useful for alerting or backing off.
+ */
+export function isRapidCycling(
+  serverName: string,
+  windowMs = 300_000,
+  threshold = 5,
+): boolean {
+  const cutoff = Date.now() - windowMs;
+  const recentDisconnects = cycleLog.filter(
+    (e) => e.server === serverName && e.event === 'disconnect' && e.timestamp > cutoff,
+  );
+  return recentDisconnects.length >= threshold;
+}
+
+/** Reset the cycle log. Test-only. */
+export function _resetCycleLog(): void {
+  cycleLog.length = 0;
+}
 
 // ── Default spawn implementation ──────────────────────────────────────
 
@@ -125,6 +201,9 @@ export function triggerWakeup(
     return false;
   }
 
+  // Log the disconnect event that triggered this wake-up attempt
+  logCycleEvent(serverName, 'disconnect');
+
   const cfg = MCP_WAKEUP_REGISTRY[serverName];
   if (!cfg) {
     logger.warn(
@@ -132,6 +211,15 @@ export function triggerWakeup(
       'MCP watchdog: no wake-up command registered for server',
     );
     return false;
+  }
+
+  // Check for rapid cycling — warn but don't block (watchdog should never
+  // prevent a recovery attempt, just surface the pattern)
+  if (isRapidCycling(serverName)) {
+    logger.warn(
+      { serverName },
+      'MCP watchdog: rapid cycling detected (≥5 disconnects in 5min)',
+    );
   }
 
   const now = Date.now();
@@ -157,6 +245,7 @@ export function triggerWakeup(
     return false;
   }
   if (!ok) {
+    logCycleEvent(serverName, 'wakeup_failed');
     logger.warn(
       { serverName, command: cfg.command },
       'MCP watchdog: wake-up spawn failed',
@@ -164,6 +253,7 @@ export function triggerWakeup(
     return false;
   }
 
+  logCycleEvent(serverName, 'wakeup_triggered');
   lastWakeup.set(serverName, now);
   logger.info(
     { serverName, command: cfg.command, args: cfg.args },
