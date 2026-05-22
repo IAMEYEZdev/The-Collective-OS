@@ -1,9 +1,10 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import { readEnvFile } from './env.js';
 
-const TMP_DIR = '/tmp/claudeclaw-env-test';
+const TMP_DIR = path.join(os.tmpdir(), 'claudeclaw-env-test');
 const TMP_ENV = path.join(TMP_DIR, '.env');
 
 function writeEnv(content: string): void {
@@ -20,9 +21,22 @@ function cleanup(): void {
 }
 
 describe('readEnvFile', () => {
+  let origProjectRoot: string | undefined;
+
+  beforeEach(() => {
+    // readEnvFile checks CLAUDECLAW_PROJECT_ROOT before process.cwd().
+    // Remove it so tests can control the base dir via cwd mock.
+    origProjectRoot = process.env.CLAUDECLAW_PROJECT_ROOT;
+    delete process.env.CLAUDECLAW_PROJECT_ROOT;
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
     cleanup();
+    // Restore env var
+    if (origProjectRoot !== undefined) {
+      process.env.CLAUDECLAW_PROJECT_ROOT = origProjectRoot;
+    }
   });
 
   function mockCwd(): void {

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -28,12 +28,10 @@ function writeSkill(baseDir: string, skillName: string, content: string): void {
 
 let tempRoot: string;
 let tempGlobal: string;
-let origHome: string;
 
 beforeEach(() => {
   tempRoot = createTempSkillDir();
   tempGlobal = createTempSkillDir();
-  origHome = process.env.HOME || os.homedir();
 
   // Create structure: tempRoot is a fake project root with CLAUDE.md
   fs.writeFileSync(path.join(tempRoot, 'CLAUDE.md'), '# test');
@@ -43,12 +41,13 @@ beforeEach(() => {
   const globalSkillsDir = path.join(tempGlobal, '.claude', 'skills');
   fs.mkdirSync(globalSkillsDir, { recursive: true });
 
-  // Override HOME so global skills scan finds our temp dir
-  process.env.HOME = tempGlobal;
+  // Mock os.homedir() so global skills scan uses our temp dir.
+  // On Windows, os.homedir() ignores process.env.HOME.
+  vi.spyOn(os, 'homedir').mockReturnValue(tempGlobal);
 });
 
 afterEach(() => {
-  process.env.HOME = origHome;
+  vi.restoreAllMocks();
   fs.rmSync(tempRoot, { recursive: true, force: true });
   fs.rmSync(tempGlobal, { recursive: true, force: true });
 });

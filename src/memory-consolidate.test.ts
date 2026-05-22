@@ -15,6 +15,11 @@ vi.mock('./embeddings.js', () => ({
   embedText: vi.fn(() => Promise.resolve([])),
 }));
 
+vi.mock('./memory-ingest.js', () => ({
+  hasNewContentForConsolidation: vi.fn(() => true),
+  clearConsolidationFlag: vi.fn(),
+}));
+
 vi.mock('./logger.js', () => ({
   logger: { warn: vi.fn(), error: vi.fn(), info: vi.fn(), debug: vi.fn() },
 }));

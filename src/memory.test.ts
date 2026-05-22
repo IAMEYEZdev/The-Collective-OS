@@ -19,6 +19,7 @@ vi.mock('./db.js', () => ({
 
 vi.mock('./memory-ingest.js', () => ({
   ingestConversationTurn: vi.fn(() => Promise.resolve(false)),
+  queueForIngestion: vi.fn(),
 }));
 
 vi.mock('./embeddings.js', () => ({
@@ -47,7 +48,7 @@ import {
   getRecentConsolidations,
 } from './db.js';
 
-import { ingestConversationTurn } from './memory-ingest.js';
+import { queueForIngestion } from './memory-ingest.js';
 
 const mockSearchMemories = vi.mocked(searchMemories);
 const mockGetRecentHighImportance = vi.mocked(getRecentHighImportanceMemories);
@@ -56,7 +57,7 @@ const mockDecayMemories = vi.mocked(decayMemories);
 const mockLogConversationTurn = vi.mocked(logConversationTurn);
 const mockSearchConsolidations = vi.mocked(searchConsolidations);
 const mockGetRecentConsolidations = vi.mocked(getRecentConsolidations);
-const mockIngest = vi.mocked(ingestConversationTurn);
+const mockQueueForIngestion = vi.mocked(queueForIngestion);
 
 function makeMemory(overrides: Record<string, unknown> = {}) {
   return {
@@ -148,7 +149,7 @@ describe('saveConversationTurn', () => {
 
   it('fires async ingestion', () => {
     saveConversationTurn('chat1', 'I prefer TypeScript over JavaScript always and forever', 'Noted.');
-    expect(mockIngest).toHaveBeenCalledWith('chat1', 'I prefer TypeScript over JavaScript always and forever', 'Noted.', 'main');
+    expect(mockQueueForIngestion).toHaveBeenCalledWith('chat1', 'I prefer TypeScript over JavaScript always and forever', 'Noted.', 'main');
   });
 });
 
@@ -242,6 +243,85 @@ describe('buildMemoryContext topic formatting', () => {
     const { contextText } = await buildMemoryContext('chat1', 'query');
     expect(contextText).toContain('Bad topics');
     // Should not crash
+  });
+
+  it('survives topics that parse to null', async () => {
+    mockSearchMemories.mockReturnValue([
+      makeMemory({ summary: 'Null topics', topics: 'null', importance: 0.6 }),
+    ]);
+    mockGetRecentHighImportance.mockReturnValue([]);
+
+    const { contextText } = await buildMemoryContext('chat1', 'query');
+    expect(contextText).toContain('Null topics');
+    expect(contextText).not.toContain('()');
+  });
+
+  it('survives topics that parse to a string', async () => {
+    mockSearchMemories.mockReturnValue([
+      makeMemory({ summary: 'String topics', topics: '"just a string"', importance: 0.6 }),
+    ]);
+    mockGetRecentHighImportance.mockReturnValue([]);
+
+    const { contextText } = await buildMemoryContext('chat1', 'query');
+    expect(contextText).toContain('String topics');
+    expect(contextText).not.toContain('()');
+  });
+
+  it('survives topics that parse to a number', async () => {
+    mockSearchMemories.mockReturnValue([
+      makeMemory({ summary: 'Number topics', topics: '42', importance: 0.6 }),
+    ]);
+    mockGetRecentHighImportance.mockReturnValue([]);
+
+    const { contextText } = await buildMemoryContext('chat1', 'query');
+    expect(contextText).toContain('Number topics');
+  });
+
+  it('survives topics that parse to an object', async () => {
+    mockSearchMemories.mockReturnValue([
+      makeMemory({ summary: 'Object topics', topics: '{"key": "value"}', importance: 0.6 }),
+    ]);
+    mockGetRecentHighImportance.mockReturnValue([]);
+
+    const { contextText } = await buildMemoryContext('chat1', 'query');
+    expect(contextText).toContain('Object topics');
+  });
+
+  it('survives topics with mixed array types', async () => {
+    mockSearchMemories.mockReturnValue([
+      makeMemory({ summary: 'Mixed array', topics: '["valid", 42, null, "also valid"]', importance: 0.6 }),
+    ]);
+    mockGetRecentHighImportance.mockReturnValue([]);
+
+    const { contextText } = await buildMemoryContext('chat1', 'query');
+    expect(contextText).toContain('Mixed array');
+    expect(contextText).toContain('valid');
+    expect(contextText).toContain('also valid');
+    // Non-string items filtered out
+    expect(contextText).not.toContain('42');
+  });
+
+  it('survives topics as undefined or empty string', async () => {
+    mockSearchMemories.mockReturnValue([
+      makeMemory({ summary: 'Empty topics', topics: '', importance: 0.6 }),
+    ]);
+    mockGetRecentHighImportance.mockReturnValue([]);
+
+    const { contextText } = await buildMemoryContext('chat1', 'query');
+    expect(contextText).toContain('Empty topics');
+  });
+
+  it('survives both layers having corrupted topics simultaneously', async () => {
+    mockSearchMemories.mockReturnValue([
+      makeMemory({ id: 1, summary: 'Layer1 bad', topics: 'null', importance: 0.8 }),
+    ]);
+    mockGetRecentHighImportance.mockReturnValue([
+      makeMemory({ id: 2, summary: 'Layer2 bad', topics: '{"broken": true}', importance: 0.9 }),
+    ]);
+
+    const { contextText } = await buildMemoryContext('chat1', 'query');
+    expect(contextText).toContain('Layer1 bad');
+    expect(contextText).toContain('Layer2 bad');
   });
 });
 
