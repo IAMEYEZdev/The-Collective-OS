@@ -10,13 +10,28 @@ function makeApprovedAnalysis(targetFiles: string[]): RepoAnalysis {
     repoUrl: 'https://github.com/test/repo',
     repoName: 'test-repo',
     analyzedAt: new Date().toISOString(),
+    version: 2,
     compatibility: {
       language: 'TypeScript',
       runtime: 'Node.js',
+      languages: {
+        primary: 'TypeScript',
+        all: ['TypeScript'],
+        runtime: 'Node.js',
+        hasTypes: true,
+      },
       dependencies: [],
       conflictingDeps: [],
       licenseCompatible: true,
       license: 'MIT',
+      licenseDetail: {
+        spdx: 'MIT',
+        compatible: true,
+        hasEERestrictions: false,
+        eeDirs: [],
+        dualLicense: false,
+        licenseFiles: ['LICENSE'],
+      },
     },
     quality: {
       hasTests: true,
@@ -25,6 +40,36 @@ function makeApprovedAnalysis(targetFiles: string[]): RepoAnalysis {
       stars: 50,
       openIssues: 2,
       maintainerActive: true,
+      documentation: {
+        hasReadme: true,
+        hasContributing: false,
+        hasChangelog: false,
+        hasDocsDir: false,
+        hasSecurityPolicy: false,
+        hasCodeOfConduct: false,
+        score: 40,
+      },
+      ci: { hasCI: false, platforms: [] },
+    },
+    complexity: {
+      totalFiles: 10,
+      totalDirs: 3,
+      estimatedLOC: 500,
+      maxDepth: 3,
+      topLevelDirs: ['src'],
+    },
+    monorepo: {
+      isMonorepo: false,
+      workspaceManager: null,
+      packages: [],
+      packageCount: 0,
+    },
+    forkability: {
+      strategy: 'fork-full',
+      reason: 'Small and clean',
+      forkableFiles: 10,
+      proprietaryFiles: 0,
+      forkabilityScore: 95,
     },
     absorptionPlan: {
       targetFiles,
@@ -40,6 +85,8 @@ function makeApprovedAnalysis(targetFiles: string[]): RepoAnalysis {
     approval: {
       melanieRecommendation: 'absorb',
       melanieReason: 'Test approval',
+      melanieScore: 90,
+      scoreBreakdown: {},
       jasonApproved: true,
     },
   };
@@ -90,7 +137,6 @@ describe('Borg ARC Absorption', () => {
   });
 
   it('absorbs clean files successfully', () => {
-    // Create a clean source file
     fs.writeFileSync(path.join(sourceDir, 'utils.ts'), 'export function add(a: number, b: number) { return a + b; }');
 
     const analysis = makeApprovedAnalysis(['utils.ts']);
