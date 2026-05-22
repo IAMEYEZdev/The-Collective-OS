@@ -349,7 +349,7 @@ export function aggregateEvaluationSignals(
   }
 
   // If L2 gate says fail, spike the security segment
-  if (l2Gate && l2Gate.decision === 'fail') {
+  if (l2Gate && l2Gate.gate === 'fail') {
     const seg = ASSESSMENT_SEGMENTS.security;
     for (let i = seg.start; i < seg.end; i++) {
       result[i] = result[i] * 1.5; // Amplify security concern
@@ -412,7 +412,7 @@ export function deriveDecision(
   securityMagnitude = Math.sqrt(securityMagnitude / (secSeg.end - secSeg.start));
 
   // Hard override: L2 gate fail = skip
-  if (l2Gate?.decision === 'fail') {
+  if (l2Gate?.gate === 'fail') {
     return { decision: 'skip', confidence: 0.9 };
   }
 
@@ -425,7 +425,7 @@ export function deriveDecision(
   }
 
   // High security risk = review
-  if (securityMagnitude > 0.3 || l2Gate?.decision === 'review') {
+  if (securityMagnitude > 0.3 || l2Gate?.gate === 'review') {
     return { decision: 'review', confidence };
   }
 
@@ -486,7 +486,7 @@ export function runAcquisitionThread(config: AcquisitionThreadConfig & {
     // Aggregate evaluation signals
     assessmentState = aggregateEvaluationSignals(
       assessmentState, l1Signal, l2Signal, l2Gate,
-    );
+    ) as Float32Array<ArrayBuffer>;
 
     // Inject intent bias: blend intent vector back in (diminishing per round)
     const intentWeight = 0.3 * Math.pow(0.7, round); // Decays: 0.3, 0.21, 0.147...
@@ -519,12 +519,9 @@ export function runAcquisitionThread(config: AcquisitionThreadConfig & {
       hiddenState: assessmentState,
       convergenceDelta: conv.delta,
       metadata: {
+        dim: assessmentState.length,
+        timestamp: new Date().toISOString(),
         taskId,
-        threadId,
-        repoUrl,
-        provisionalDecision: provisional,
-        confidence,
-        qualityTier,
       },
     });
 
@@ -664,7 +661,7 @@ export function createBorgQueenReport(
  */
 export function createBorgArcPayload(hiddenState: Float32Array): LatentPayload {
   return {
-    data: new Float32Array(hiddenState),
+    data: hiddenState.slice() as Float32Array<ArrayBuffer>,
     numVectors: 1,
     dim: LATENT_DIM,
     adapterKey: 'borgarc_L3_acquisition',
@@ -677,7 +674,7 @@ export function createBorgArcPayload(hiddenState: Float32Array): LatentPayload {
  */
 export function createBorgQueenPayload(report: BorgQueenReport): LatentPayload {
   return {
-    data: new Float32Array(report.hiddenState),
+    data: report.hiddenState.slice() as Float32Array<ArrayBuffer>,
     numVectors: 1,
     dim: LATENT_DIM,
     adapterKey: 'borgarc_L3_to_borgqueen',

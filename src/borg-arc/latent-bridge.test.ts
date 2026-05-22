@@ -52,7 +52,7 @@ function makeAnalysis(overrides?: Partial<{
     compatibility: {
       language: 'typescript',
       runtime: 'node',
-      languages: { primary: 'typescript', runtime: 'node', breakdown: {}, hasTypes: true },
+      languages: { primary: 'typescript', all: ['typescript'], runtime: 'node', hasTypes: true },
       dependencies: [],
       conflictingDeps: [],
       licenseCompatible: compat,
@@ -62,7 +62,8 @@ function makeAnalysis(overrides?: Partial<{
         compatible: compat,
         hasEERestrictions: false,
         eeDirs: [],
-        proprietaryMarkers: [],
+        dualLicense: false,
+        licenseFiles: [],
       },
     },
     quality: {
@@ -72,16 +73,17 @@ function makeAnalysis(overrides?: Partial<{
       stars: 100,
       openIssues: 5,
       maintainerActive: active,
-      documentation: { score: 70, hasReadme: true, hasContributing: false, hasChangelog: true, hasExamples: false },
+      documentation: { score: 70, hasReadme: true, hasContributing: false, hasChangelog: true, hasDocsDir: false, hasSecurityPolicy: false, hasCodeOfConduct: false },
       ci: { hasCI: true, platforms: ['github-actions'] },
     },
     complexity: {
       totalFiles: files,
-      totalLOC: files * 50,
-      avgFileSize: 50,
-      maxFileSize: 200,
+      totalDirs: 5,
+      estimatedLOC: files * 50,
+      maxDepth: 3,
+      topLevelDirs: ['src'],
     } as ComplexityMetrics,
-    monorepo: { isMonorepo: false, packages: [] },
+    monorepo: { isMonorepo: false, workspaceManager: null, packages: [], packageCount: 0 },
     forkability: {
       strategy: 'fork-full',
       reason: 'Clean license',
@@ -103,12 +105,12 @@ function makeAnalysis(overrides?: Partial<{
   };
 }
 
-function makeGateSignal(decision: 'pass' | 'fail' | 'review'): GateSignal {
+function makeGateSignal(gate: 'pass' | 'fail' | 'review'): GateSignal {
   return {
-    decision,
+    gate,
     confidence: 0.8,
     riskVector: new Float32Array(LATENT_DIM),
-    summary: `Gate: ${decision}`,
+    reason: `Gate: ${gate}`,
   };
 }
 
@@ -380,10 +382,19 @@ describe('Acquisition Thread Execution', () => {
       intent: makeIntent(),
       maxRounds: 3,
       graphAnalysis: {
+        taskId: 'test-task',
         rounds: [],
         converged: true,
         finalState: l1State,
         finalConfidence: 0.8,
+        roundsExecuted: 0,
+        payload: {
+          data: l1State.slice() as Float32Array<ArrayBuffer>,
+          numVectors: 1,
+          dim: LATENT_DIM,
+          adapterKey: 'gitnexus_L1',
+          sourceHiddenSize: LATENT_DIM,
+        },
       },
     });
 

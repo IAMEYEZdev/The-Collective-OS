@@ -49,6 +49,7 @@ import {
 } from './deepsec/latent-bridge.js';
 import type { ScanLatentResult, StructuralSignal, GateSignal } from './deepsec/latent-bridge.js';
 import { scanDirectory } from './deepsec/scanner.js';
+import { ALL_RULES } from './deepsec/rules.js';
 import {
   planAcquisitionBatch,
   encodeIntentSignal,
@@ -117,6 +118,10 @@ export interface DelegationResult {
   borgQueenCluster?: ClusterConfig;
   /** L6 Borg Queen: capability gaps detected across recent clusters */
   capabilityGaps?: CapabilityGap[];
+  /** L4 Cross-Agent Correlation: correlation result (present when feedback was injected) */
+  crossAgentCorrelation?: CorrelationResult;
+  /** L4 Cross-Agent Correlation: feedback execution results */
+  feedbackResults?: FeedbackExecutionResult[];
 }
 
 export interface AgentInfo {
@@ -338,7 +343,7 @@ export async function delegateToAgent(
     try {
       // Get subgraph for the agent's working directory
       const agentConfig = loadAgentConfig(agentId);
-      const agentRoot = agentConfig.cwd ?? path.join(PROJECT_ROOT, 'agents', agentId);
+      const agentRoot = path.join(PROJECT_ROOT, 'agents', agentId);
       const subgraph = await getSubgraph(driver, agentRoot, 2);
 
       if (subgraph.nodes.length > 0) {
@@ -351,7 +356,7 @@ export async function delegateToAgent(
 
         // Initialize attention: use Ax warm-start if available, else uniform
         const initialAttention = axDiscoveryResult
-          ? initAttentionFromAxWarmStart(subgraph, axDiscoveryResult.initializer)
+          ? initAttentionFromAxWarmStart(subgraph, axDiscoveryResult.initializer.hiddenState)
           : createUniformAttention(subgraph);
 
         graphAnalysisResult = runGraphRecursion({
@@ -535,9 +540,8 @@ export async function delegateToAgent(
 
       try {
         // Run security scan on agent's working directory
-        const agentConfig2 = loadAgentConfig(agentId);
-        const scanRoot = agentConfig2.cwd ?? path.join(PROJECT_ROOT, 'agents', agentId);
-        const baseScanResult = scanDirectory(scanRoot);
+        const scanRoot = path.join(PROJECT_ROOT, 'agents', agentId);
+        const baseScanResult = scanDirectory(scanRoot, ALL_RULES);
 
         if (baseScanResult.findings.length > 0) {
           // Determine round budget
@@ -551,10 +555,9 @@ export async function delegateToAgent(
           const structuralSignals: StructuralSignal[] = [];
           if (graphAnalysisResult) {
             structuralSignals.push({
-              source: 'gitnexus',
+              fromAgent: 'gitnexus',
               signalType: 'graph_structure',
               hiddenState: graphAnalysisResult.finalState,
-              confidence: graphAnalysisResult.finalConfidence,
             });
           }
 

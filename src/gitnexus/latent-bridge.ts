@@ -26,6 +26,7 @@ import { RECURSION_DEPTH_MAP } from '../ax/types.js';
 import type { ReasoningStructure } from '../ax/types.js';
 
 import type { Subgraph, SubgraphNode, SubgraphEdge, ImpactResult } from './query.js';
+export type { Subgraph } from './query.js';
 
 // ── Types ──────────────────────────────────────────────────────────
 
