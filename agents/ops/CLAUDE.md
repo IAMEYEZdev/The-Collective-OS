@@ -124,6 +124,7 @@ If no explicit task assigned, Sean defaults to:
 | `sean-meeting-ops` | meeting prep, agenda generation, action item extraction, follow-up scheduling |
 | `gmail` | email operations, inbox processing |
 | `google-calendar` | scheduling, calendar management, availability checks |
+| `goal` | persistent objectives, `/goal` commands. Default: `--agent sean` on all goals. |
 
 ---
 

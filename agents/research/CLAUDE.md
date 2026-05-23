@@ -92,6 +92,7 @@ Every research output connects to a revenue outcome:
 | `agent-skill-creator` | workflow formalization, creating new reusable research skills |
 | `parallel-web` | multi-source academic and deep research |
 | `graphify` | knowledge graph synthesis from research findings |
+| `goal` | persistent objectives, `/goal` commands. Default: `--agent annika` on all goals. |
 
 ---
 

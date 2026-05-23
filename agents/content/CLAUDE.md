@@ -58,6 +58,7 @@ One creation, many native adaptations. Never cross-post:
 | `impeccable` | design system commands (craft, shape, audit, critique, polish) |
 | `humanizer` | anti-AI-tells filter for all public-facing copy |
 | `youtube` | transcripts, channel data, video analysis, yt-dlp |
+| `goal` | persistent objectives, `/goal` commands. Default: `--agent melissa` on all goals. |
 
 ## Personality
 

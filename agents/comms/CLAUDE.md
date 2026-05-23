@@ -73,6 +73,7 @@ Never write outreach without Annika's intel. Generic messages get deleted. Perso
 | `james-brand-voice` | voice calibration, ghost-writing, copy audit, tone consistency |
 | `humanizer` | anti-AI-tells filter for all public-facing copy |
 | `gmail` | email drafts, replies, inbox management |
+| `goal` | persistent objectives, `/goal` commands. Default: `--agent james` on all goals. |
 
 ---
 

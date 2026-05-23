@@ -131,6 +131,7 @@ When a task requires multiple agents:
 | `agent-browser` | browse, scrape, click, fill form |
 | `maestro` | parallel tasks, scale output |
 | `gitnexus` (CLI) | code structure, dependencies, blast radius, callers, imports |
+| `goal` | persistent objectives, `/goal` commands. Use `/goal team` to monitor all agent goals. |
 
 ## Coding Discipline
 
