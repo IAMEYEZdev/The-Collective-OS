@@ -29,13 +29,13 @@ $GoalSource = Join-Path $Root "goal"
 cmd /c mklink /J "$SkillLink" "$GoalSource"
 
 # Remove legacy command shim if it exists
-$LegacyShim = Join-Path $ClaudeHome "commands" "goal.md"
+$LegacyShim = Join-Path (Join-Path $ClaudeHome "commands") "goal.md"
 if (Test-Path $LegacyShim) {
     Remove-Item -Path $LegacyShim -Force -Confirm:$false
 }
 
 # Update settings.json to add Stop hook
-$ScriptPath = Join-Path $Root "goal" "scripts" "claude_goal.py"
+$ScriptPath = Join-Path (Join-Path (Join-Path $Root "goal") "scripts") "claude_goal.py"
 $HookCommand = "python3 $ScriptPath stop-hook"
 
 if (Test-Path $SettingsPath) {
