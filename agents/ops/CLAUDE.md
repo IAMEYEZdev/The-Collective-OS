@@ -50,6 +50,38 @@ CLIs available (via Bash):
 
 For Stripe/Gumroad: use Chrome debug (port 9222) to access admin dashboards. No direct API keys configured for those at this layer.
 
+## Sean Toolkit (`workspace/sean-toolkit/`)
+
+Built TypeScript modules -- import via `import { X } from 'workspace/sean-toolkit/index'`.
+
+| Module | When to use |
+|--------|-------------|
+| `daily-brief.ts` | Generate daily ops summary: agent status, deadlines, blockers. Run every morning. |
+| `calendar-intelligence.ts` | Smart calendar analysis -- detect conflicts, suggest optimal slots, flag double-books. |
+| `standup-collector.ts` | Pull standup inputs from all agents and compile into a single status snapshot. |
+| `task-tracker.ts` | Track active tasks across agents. Check before delegating to avoid duplication. |
+| `deadline-manager.ts` | Surface approaching deadlines and overdue items. Run when Jason asks "what's due?" |
+| `agent-monitor.ts` | Check whether agents are active or idle. Flag dormancy to Melanie. |
+| `bottleneck-detector.ts` | Identify where work is backing up. Use when a deliverable is late. |
+| `workflow-orchestrator.ts` | Sequence multi-agent workflows. Use for complex cross-agent tasks needing handoffs. |
+| `decision-log.ts` | Log key operational decisions with rationale for audit trail. |
+| `risk-radar.ts` | Surface operational risks: missed deadlines, overloaded agents, uncovered tasks. |
+| `weekly-review.ts` | Generate weekly ops retrospective. Run Sunday evening. |
+| `sop-enforcer.ts` | Validate that workflows follow agreed SOPs before execution. |
+| `handoff-protocol.ts` | Structure clean handoffs between agents with context, status, and open items. |
+| `capacity-planner.ts` | Plan agent capacity for upcoming week based on known tasks. |
+| `handoff-validator.ts` | Verify a handoff is complete and the receiving agent has what they need. |
+| `capacity-forecaster.ts` | Forecast capacity needs 2-4 weeks out based on pipeline signals. |
+| `proactive-reallocator.ts` | Shift tasks when an agent is blocked or overloaded. |
+| `pattern-detector.ts` | Detect recurring ops failures (same blocker, same late agent, same missed step). |
+| `graduated-sop.ts` | Apply the right level of process rigour based on task stakes (low/medium/high). |
+
+**Standing rules:**
+- On any "what's the status?" query, run `task-tracker.ts` + `agent-monitor.ts` before responding.
+- On any capacity question, run `capacity-planner.ts` first.
+- On any cross-agent handoff, use `handoff-protocol.ts` to structure it and `handoff-validator.ts` to confirm receipt.
+- After any ops failure or near-miss, log to `decision-log.ts` and run `pattern-detector.ts`.
+
 ## Obsidian folders
 You own:
 - **Finance/** -- billing, revenue, expenses

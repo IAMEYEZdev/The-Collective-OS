@@ -1294,6 +1294,11 @@ Never cross-post identical content. Every platform has its own format, audience 
 - `browser-harness` -- web automation
 - `playwright-skill` -- advanced browser automation
 
+### Design Engineering Skills (project-level, `.claude/skills/`)
+- `impeccable` -- 23-command design system: craft, shape, audit, critique, polish, animate, colorize, typeset, layout, bolder, quieter, distill, harden, onboard, delight, overdrive, clarify, adapt, optimize, extract, teach, document, live. Covers full design lifecycle from shaping to shipping. Anti-AI-slop rules, OKLCH color system, register-aware (brand vs product). Invoke: `/impeccable <command> [target]`
+- `design-taste-frontend` -- High-agency frontend skill with configurable design dials (DESIGN_VARIANCE=8, MOTION_INTENSITY=6, VISUAL_DENSITY=4). Anti-slop bias correction, 40+ creative arsenal concepts (bento grids, parallax tilt, magnetic buttons, kinetic typography, scroll hijack, morphing modals). Bans: Inter font, pure black, neon glows, 3-column cards, centered heroes, generic data. Invoke: use automatically for any frontend/UI work
+- `emil-design-eng` -- Emil Kowalski's design engineering philosophy. Animation decision framework (should it animate? easing? speed?), custom curves (`cubic-bezier(0.23, 1, 0.32, 1)`), spring animations, component polish (button scale(0.97), origin-aware popovers, tooltip skip-delay), CSS clip-path animations, gesture/drag interactions, performance rules (only animate transform+opacity). Invoke: use automatically for animation/interaction decisions
+
 ### Compound Engineering Skills (available via Skill tool)
 - `ce-gemini-imagegen` -- Gemini-powered image generation
 - `ce-frontend-design` -- UI/visual design iteration
@@ -1306,6 +1311,10 @@ Never cross-post identical content. Every platform has its own format, audience 
 
 ### Project Skills (`./skills/`)
 - `tldr`, `timezone`
+
+### Website Build Stack
+- **Framer Motion** -- cinematic animation library. Install in any project: `npm install framer-motion`. Use for all page transitions, scroll reveals, hover states, entrance animations. Claude auto-detects and uses it when present. Docs: https://motion.dev
+- **21st.dev** -- marketplace of pre-built React components (hero sections, pricing tables, testimonials, navbars, CTAs). Pull components directly into builds. Site: https://21st.dev. Install via their setup command in Claude Code. Use as component starting points, then customize with design skills
 
 ### CLIs Available (via Bash)
 - **Apify** for trend scraping, competitor monitoring: `npx -y apify-cli <cmd>`
@@ -1320,6 +1329,32 @@ Social media posting tools (prefixed `mcp__ghl__social-media-posting_*`):
 - `get-account`, `get-social-media-statistics`
 
 Use these for scheduled social posting and performance tracking.
+
+---
+
+## Design Workflow (Website/Landing Page/UI)
+
+When building websites, landing pages, or any frontend UI for clients or content:
+
+1. **Project setup**: `npm install framer-motion` + pull 21st.dev components as base. Run `/impeccable teach` if no PRODUCT.md, then `/impeccable shape` to plan UX/UI
+2. **Component sourcing**: Check 21st.dev for pre-built components (heroes, pricing, testimonials, navbars) before building from scratch. Pull, then customize heavily with design skills so output never looks template-y
+3. **During build**: All three design skills (impeccable, taste-skill, emil-design-eng) are active simultaneously. They reinforce each other:
+   - Impeccable: structural design decisions, color strategy (OKLCH), register awareness, anti-slop checks
+   - Taste Skill: layout variance, motion intensity, visual density dials; creative arsenal for advanced UI concepts
+   - Emil: animation timing, easing curves, component interaction polish, performance
+4. **Animation layer**: Use Framer Motion for all transitions, scroll reveals, entrance animations, hover states. Follow Emil skill rules: only animate transform+opacity, use custom easing (`cubic-bezier(0.23, 1, 0.32, 1)`), no `ease-in` for UI
+5. **Before shipping**: Run `/impeccable audit` for a11y + technical checks, `/impeccable polish` for final quality pass
+6. **Quality bar**: Target 8-9/10 quality ($10-15K agency level). No AI-slop patterns (no Inter font, no pure black, no gradient text, no identical card grids, no centered-hero-over-dark-image defaults)
+
+### Key Anti-Patterns (merged from all three skills)
+- No `ease-in` for UI animations (use `ease-out` or custom curves)
+- No `scale(0)` entry animations (start from `scale(0.95)` + opacity)
+- No `h-screen` (use `min-h-[100dvh]`)
+- No `transition: all` (specify exact properties)
+- No side-stripe borders, glassmorphism-as-default, hero-metric templates
+- No emojis in code/markup
+- Buttons MUST have `:active` feedback (`scale(0.97)`)
+- Popovers MUST be origin-aware (not `transform-origin: center`)
 
 ---
 

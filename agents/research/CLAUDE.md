@@ -49,6 +49,52 @@ Global skills (`~/.claude/skills/`): `parallel-web` (academic + deep research), 
 
 Project skills (`./skills/`): `tldr` (summarisation), `timezone`.
 
+Agent skills (`~/.agents/skills/ok-skills/`): installed 2026-05-22. Invoke via Skill tool with path prefix `ok-skills/`:
+- **`autoresearch`** — autonomous goal-directed iteration engine. Use when research requires multiple convergence rounds, iterative hypothesis testing, or multi-step deep-dives. Subcommands: `probe` (open-ended exploration), `reason` (structured analysis), `predict` (outcome forecasting), `learn` (knowledge synthesis). ALWAYS invoke before any deep research that will take 5+ tool calls.
+- **`planning-with-files`** — persistent markdown working memory on disk (`task_plan.md`, `findings.md`, `progress.md`). Use for any multi-session research project. Creates disk state that survives session resets. Invoke at start of any research that spans multiple turns or sessions.
+- **`exa-search`** — formalised Exa search with parameter templates for `web_search_exa`, `company_research_exa`, `get_code_context_exa`. Use for all prospect/company intel and competitive research. Consistent parameters = consistent output quality.
+- **`grill-with-docs`** — source interrogation and claim validation against documentation. Maintains session glossary of resolved terms. Use when verifying claims before including in prospect briefs or content. Enforces confirmed/likely/speculative discipline.
+- **`agent-skill-creator`** — converts any workflow into a reusable SKILL.md. Use to formalise new research workflows (parallel_search, verify_claim, etc.) into installable skills for the collective.
+
+## Annika Toolkit (`workspace/annika-toolkit/`)
+
+Built TypeScript modules — import via `import { X } from 'workspace/annika-toolkit/index'`. Full DI, AI-optional fallbacks, factory pattern.
+
+| Module | When to use |
+|--------|-------------|
+| `research-coordinator.ts` | Orchestrate multi-source research runs. Entry point for complex briefs. |
+| `research-planner.ts` | Scope + stage any research question before executing. |
+| `source-ranker.ts` | Score and rank sources by credibility before citing. |
+| `claim-verifier.ts` | Verify any stat/claim before including in briefs or content. Wraps verify_claim.py. |
+| `competitor-monitor.ts` | Pull competitor change signals. Wraps competitor_monitor.py. |
+| `signal-aggregator.ts` | **Real-time feed aggregation.** LinkedIn, news, competitor signals unified. Invoke on every prospect brief to catch recent moves. |
+| `prospect-profiler.ts` | Full prospect profile: role, company, signals, hook. Feed to James. |
+| `briefing-generator.ts` | Generate structured output briefs (TL;DR + findings + sources). |
+| `content-fuel-engine.ts` | Contrarian angle + 3 data points + anecdote for Melissa. |
+| `trend-detector.ts` | Detect emerging signals in a topic area. |
+| `market-scanner.ts` | Industry baselines + competitor AI maturity for audits. |
+| `deep-dive-engine.ts` | Multi-round iterative research for complex questions. Pairs with autoresearch skill. |
+| `win-loss-analyzer.ts` | Analyse which research led to conversions. **Needs Jackson GHL data to fully activate.** |
+
+## Feedback Loops Toolkit (`workspace/feedback-loops-toolkit/`)
+
+Closes the outcome tracking gap. Cross-agent signals via AgentBus.
+
+| Module | When to use |
+|--------|-------------|
+| `feedback-coordinator.ts` | Entry point. Coordinate full feedback cycle after any outreach or content. |
+| `outcome-tracker.ts` | Log whether a piece of research led to a reply, meeting, or conversion. |
+| `attribution-engine.ts` | 5-model attribution: which research/content drove pipeline. **Partial until GHL wired.** |
+| `performance-scorer.ts` | S-F grade per research brief (did it give James what he needed?). |
+| `pattern-detector.ts` | Surface which prospect types, industries, hooks convert. |
+| `learning-extractor.ts` | Extract lessons from wins/losses, write to hive mind. |
+| `content-analytics.ts` | Track LinkedIn post performance signals from Melissa's output. |
+| `outreach-analytics.ts` | Track James outreach reply rates by hook/persona type. |
+| `pipeline-attribution.ts` | Map research → outreach → pipeline stage. **Blocked until Jackson has GHL creds.** |
+| `retrospective-generator.ts` | Weekly/monthly retrospective briefs for Melanie. |
+
+**Standing rule:** After any prospect brief delivered to James, log to `outcome-tracker.ts` within 48h with outcome (replied / no reply / meeting booked). After any content research delivered to Melissa, log reach + engagement 72h post-publish.
+
 CLIs available (via Bash):
 - **Apify** for scraping at scale: `npx -y apify-cli <cmd>` or curl actor APIs directly
 - **Basic Memory** for persistent notes: `uvx --from basic-memory basic-memory tool search-notes "query"`

@@ -49,6 +49,28 @@ CLIs available (via Bash):
 - **Basic Memory** for contact notes + relationship history: `uvx --from basic-memory basic-memory tool search-notes "name"`
 - **notify.sh** mid-task status pings: `$CLAUDECLAW_PROJECT_ROOT/scripts/notify.sh "status"`
 
+## James Toolkit (`workspace/james-toolkit/`)
+
+Built TypeScript modules -- import via `import { X } from 'workspace/james-toolkit/james-toolkit-index'`.
+
+| Module | When to use |
+|--------|-------------|
+| `message-crafter.ts` | Craft outreach messages. Pass prospect intel from Annika + voice tone. Entry point for all cold and warm outreach. |
+| `outreach-sequencer.ts` | Build multi-touch outreach sequences (email + LinkedIn + DM). Use for any prospect requiring more than one touchpoint. |
+| `outreach-queue.ts` | Manage the pending outreach queue. Check before starting new outreach to avoid duplicates. |
+| `reply-tracker.ts` | Track which messages got replies. Run when Jason asks "what's heard back?" |
+| `prospect-enricher.ts` | Lightweight prospect enrichment at send time. Pairs with Annika's full intel brief. |
+| `retry-engine.ts` | Manage follow-up retry logic -- when to resend, when to drop, what to change. |
+| `channel-resilience.ts` | Handle channel failures gracefully. If Gmail bounces, route via GHL. If LinkedIn DM fails, fall back to email. |
+| `multi-channel-orchestrator.ts` | Coordinate outreach across Gmail, LinkedIn, and GHL simultaneously. Use for high-priority prospects. |
+| `outreach-analytics.ts` | Track reply rates, open rates, and sequence performance by hook/persona type. |
+
+**Standing rules:**
+- Before crafting any outreach, check `outreach-queue.ts` -- if a sequence is already running for this prospect, do NOT start a new one.
+- Every message drafted via `message-crafter.ts` must pass through `humanizer` skill before send.
+- After any sequence completes (reply or drop), log outcome to `reply-tracker.ts`.
+- For any new prospect not in queue, request Annika intel first, then feed to `message-crafter.ts`.
+
 ## Obsidian folders
 You own:
 - **Communications/** -- email drafts, message templates
