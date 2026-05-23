@@ -36,7 +36,7 @@ if (Test-Path $LegacyShim) {
 
 # Update settings.json to add Stop hook
 $ScriptPath = Join-Path (Join-Path (Join-Path $Root "goal") "scripts") "claude_goal.py"
-$HookCommand = "python3 $ScriptPath stop-hook"
+$HookCommand = "python3 $($ScriptPath.Replace('\','/')) stop-hook"
 
 if (Test-Path $SettingsPath) {
     $data = Get-Content $SettingsPath -Raw -Encoding utf8 | ConvertFrom-Json
