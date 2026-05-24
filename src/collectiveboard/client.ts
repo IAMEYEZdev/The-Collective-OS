@@ -496,8 +496,10 @@ export class CollectiveBoardClient {
       const card = await this.getCard(cardId);
       const auditAction = opts?.approver ? 'approved' : 'status_change';
       const auditNew = opts?.approver ? `${status} (by ${opts.approver})` : status;
-      logBoardAudit(cardId, card?.title || '', this.config.username, auditAction, 'status', oldStatus, auditNew);
-      logStatusTransition(cardId, card?.title || cardTitle, this.config.username, oldStatus, status);
+      const agentOptId = (card?.fields?.properties?.['prop-agent'] as string) || '';
+      const assignedAgent = Object.entries(AGENT_MAP).find(([, v]) => v === agentOptId)?.[0] || this.config.username;
+      logBoardAudit(cardId, card?.title || '', assignedAgent, auditAction, 'status', oldStatus, auditNew);
+      logStatusTransition(cardId, card?.title || cardTitle, assignedAgent, oldStatus, status);
     } catch { /* audit is best-effort */ }
     fireWebhook({
       event: opts?.approver ? 'approved' : 'status_change',

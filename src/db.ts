@@ -4,6 +4,7 @@ import fs from 'fs';
 import path from 'path';
 
 import { DB_ENCRYPTION_KEY, STORE_DIR } from './config.js';
+import { bridgeHiveLog, bridgeMemory, bridgeMissionTask, bridgeBoardAudit } from './cognee-bridge.js';
 import { cosineSimilarity } from './embeddings.js';
 import { logger } from './logger.js';
 
@@ -768,7 +769,12 @@ export function saveStructuredMemory(
     now,
     now,
   );
-  return result.lastInsertRowid as number;
+  const memoryId = result.lastInsertRowid as number;
+
+  // Dual-write to cognee graph (fire-and-forget)
+  bridgeMemory(agentId, summary, entities, topics, importance, source);
+
+  return memoryId;
 }
 
 const STOP_WORDS = new Set([
@@ -1820,6 +1826,9 @@ export function logToHiveMind(
     `INSERT INTO hive_mind (agent_id, chat_id, action, summary, artifacts, created_at)
      VALUES (?, ?, ?, ?, ?, ?)`,
   ).run(agentId, chatId, action, summary, artifacts ?? null, now);
+
+  // Dual-write to cognee graph (fire-and-forget)
+  bridgeHiveLog(agentId, action, summary, artifacts);
 }
 
 export function getHiveMindEntries(limit = 20, agentId?: string): HiveMindEntry[] {
@@ -2023,6 +2032,9 @@ export function createMissionTask(
     `INSERT INTO mission_tasks (id, title, prompt, assigned_agent, status, created_by, priority, created_at)
      VALUES (?, ?, ?, ?, 'queued', ?, ?, ?)`,
   ).run(id, title, prompt, assignedAgent, createdBy, priority, now);
+
+  // Dual-write to cognee graph (fire-and-forget)
+  bridgeMissionTask(id, title, prompt, assignedAgent, priority);
 }
 
 export function getUnassignedMissionTasks(): MissionTask[] {
@@ -2505,6 +2517,9 @@ export function logBoardAudit(
     `INSERT INTO board_audit_log (card_id, card_title, agent_id, action, field, old_value, new_value, created_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, strftime('%s','now'))`,
   ).run(cardId, cardTitle, agentId, action, field, oldValue, newValue);
+
+  // Mirror to cognee graph for organizational tracking
+  bridgeBoardAudit(cardId, cardTitle, agentId, action, field || null, oldValue || null, newValue || null);
 }
 
 export function getBoardAuditLog(

@@ -37,6 +37,7 @@ import { logger } from './logger.js';
 import { downloadMedia, buildPhotoMessage, buildDocumentMessage, buildVideoMessage } from './media.js';
 import { buildMemoryContext, evaluateMemoryRelevance, saveConversationTurn, shouldNudgeMemory, MEMORY_NUDGE_TEXT } from './memory.js';
 import { flushIngestionBuffer } from './memory-ingest.js';
+import { runConsolidation } from './memory-consolidate.js';
 import { classifyMessageComplexity } from './message-classifier.js';
 import { scanForSecrets, redactSecrets } from './exfiltration-guard.js';
 import { trackUsage, getRateStatus } from './rate-tracker.js';
@@ -890,6 +891,9 @@ async function handleMessage(ctx: Context, message: string, forceVoiceReply = fa
           clearSession(chatIdStr, AGENT_ID);
           sessionBaseline.delete(activeSessionId ?? chatIdStr);
           sessionTurnCount.delete(turnKey);
+
+          // Trigger memory consolidation before session knowledge is lost
+          void runConsolidation(chatIdStr).catch((err) => logger.warn({ err }, 'Consolidation on auto-checkpoint failed'));
         })();
 
         // Notify user
@@ -1126,6 +1130,9 @@ export function createBot(): Bot {
     // Flush ingestion buffer on session boundary (B.1 Task 2)
     void flushIngestionBuffer().catch((err) => logger.warn({ err }, 'Buffer flush on /newchat failed'));
 
+    // Consolidate memories before session state is cleared
+    void runConsolidation(chatIdStr).catch((err) => logger.warn({ err }, 'Consolidation on /newchat failed'));
+
     clearSession(chatIdStr, AGENT_ID);
     sessionBaseline.delete(chatIdStr);
     sessionTurnCount.delete(`${chatIdStr}:${AGENT_ID}`);
@@ -1257,8 +1264,13 @@ export function createBot(): Bot {
   // /forget — clear session (memory decay handles the rest)
   bot.command('forget', async (ctx) => {
     if (await replyIfLocked(ctx)) return;
+    const forgetChatId = ctx.chat!.id.toString();
     void flushIngestionBuffer().catch((err) => logger.warn({ err }, 'Buffer flush on /forget failed'));
-    clearSession(ctx.chat!.id.toString(), AGENT_ID);
+
+    // Consolidate memories before session state is cleared
+    void runConsolidation(forgetChatId).catch((err) => logger.warn({ err }, 'Consolidation on /forget failed'));
+
+    clearSession(forgetChatId, AGENT_ID);
     await ctx.reply('Session cleared. Memories will fade naturally over time.');
   });
 
