@@ -51,6 +51,8 @@ Commands:
     --layer <L1-L6>    RecursiveMAS layer
     --goal <id>        Link to goal ID
     --mission <id>     Link to mission ID
+    --revenue <amt>    Revenue value (e.g. 500)
+    --depends-on <id>  Depends on card ID
 
   status <cardId> <status>    Update task status
     --approver <name>          Required when review→done (approval gate)
@@ -58,6 +60,12 @@ Commands:
   complete <cardId>           Mark done (--approver required if in review)
   block <cardId>              Mark blocked
   delete <cardId>             Delete task
+
+  revenue <cardId> <amount>   Set revenue value on task
+  depend <cardId> <depId>     Set dependency (cardId depends on depId)
+  dependents <cardId>         Show cards that depend on this card
+  history <cardId>            Show status transition history
+  cycletime <cardId>          Show cycle time (active→done)
 
   list                        List all tasks
     --agent <name>            Filter by agent
@@ -69,7 +77,14 @@ Commands:
     --track <t>               Filter by track: ${TRACKS.join(', ')}
     --priority <p>            Filter by priority
 
-  dashboard                   Show team overview
+  pipeline                    Revenue pipeline summary
+    --agent <name>            Filter by agent
+    --track <t>               Filter by track
+
+  health                      Agent health metrics (velocity, cycle time)
+    --agent <name>            Single agent detail
+
+  dashboard                   Show team overview (includes revenue + health)
   board                       Show board info
 `);
 }
@@ -102,6 +117,8 @@ async function main(): Promise<void> {
           layer: flags.layer,
           goalId: flags.goal,
           missionId: flags.mission,
+          revenue: flags.revenue ? parseFloat(flags.revenue) : undefined,
+          dependsOn: flags['depends-on'],
         });
 
         console.log(JSON.stringify({ id: card.id, title: card.title, agent }, null, 2));
@@ -183,7 +200,7 @@ async function main(): Promise<void> {
       case 'dashboard': {
         const dash = await client.getDashboard();
         console.log(`\nCollectiveBoard Dashboard`);
-        console.log(`${'='.repeat(40)}`);
+        console.log(`${'='.repeat(50)}`);
         console.log(`Total tasks: ${dash.total}`);
         console.log(`\nBy Status:`);
         for (const [s, n] of Object.entries(dash.byStatus)) {
@@ -197,6 +214,19 @@ async function main(): Promise<void> {
           console.log(`\nBlocked:`);
           for (const b of dash.blocked) {
             console.log(`  - ${b.title} (${b.id})`);
+          }
+        }
+        if (dash.pipelineValue > 0) {
+          console.log(`\nPipeline Value: $${dash.pipelineValue.toLocaleString()}`);
+          for (const [a, v] of Object.entries(dash.revenueByAgent)) {
+            console.log(`  ${a}: $${v.toLocaleString()}`);
+          }
+        }
+        if (dash.health.length > 0) {
+          console.log(`\nAgent Health:`);
+          for (const h of dash.health) {
+            const cycle = h.avg_cycle_seconds ? `${Math.round(h.avg_cycle_seconds / 60)}min` : '-';
+            console.log(`  ${h.agent_id}: ${h.completed}/${h.total_tasks} done (${h.completion_rate}%) | active: ${h.active_count} | blocked: ${h.blocked_count} | avg cycle: ${cycle}`);
           }
         }
         break;
@@ -246,6 +276,116 @@ async function main(): Promise<void> {
       case 'board': {
         const board = await client.getBoard();
         console.log(JSON.stringify(board, null, 2));
+        break;
+      }
+
+      case 'revenue': {
+        const cardId = positional[1];
+        const amount = parseFloat(positional[2]);
+        if (!cardId || isNaN(amount)) { console.error('Error: cardId and amount required'); process.exit(1); }
+        await client.setRevenue(cardId, amount);
+        console.log(JSON.stringify({ cardId, revenue: amount }));
+        break;
+      }
+
+      case 'depend': {
+        const cardId = positional[1];
+        const depId = positional[2];
+        if (!cardId || !depId) { console.error('Error: cardId and depId required'); process.exit(1); }
+        await client.setDependency(cardId, depId);
+        console.log(JSON.stringify({ cardId, dependsOn: depId }));
+        break;
+      }
+
+      case 'dependents': {
+        const cardId = positional[1];
+        if (!cardId) { console.error('Error: cardId required'); process.exit(1); }
+        const deps = await client.getDependents(cardId);
+        if (deps.length === 0) {
+          console.log('No cards depend on this task.');
+        } else {
+          console.log(`${deps.length} dependent(s):`);
+          for (const d of deps) {
+            const p = client.resolveCardProps(d);
+            console.log(`  ${d.title} (${d.id}) [${p.status}]`);
+          }
+        }
+        break;
+      }
+
+      case 'history': {
+        const cardId = positional[1];
+        if (!cardId) { console.error('Error: cardId required'); process.exit(1); }
+        const history = client.getTaskHistory(cardId);
+        if (history.length === 0) {
+          console.log('No status history for this card.');
+        } else {
+          console.log(`Status history (${history.length} transitions):\n`);
+          for (const h of history) {
+            const time = new Date(h.created_at * 1000).toLocaleString();
+            console.log(`  ${time} | ${h.old_status || '(new)'} -> ${h.new_status} | @${h.agent_id}`);
+          }
+        }
+        break;
+      }
+
+      case 'cycletime': {
+        const cardId = positional[1];
+        if (!cardId) { console.error('Error: cardId required'); process.exit(1); }
+        const secs = client.getTaskCycleTime(cardId);
+        if (secs === null) {
+          console.log('No cycle time available (needs both active and done transitions).');
+        } else {
+          const mins = Math.round(secs / 60);
+          const hours = Math.round(secs / 3600 * 10) / 10;
+          console.log(`Cycle time: ${secs}s (${mins}min / ${hours}h)`);
+        }
+        break;
+      }
+
+      case 'pipeline': {
+        const pv = await client.getPipelineValue({
+          agent: flags.agent as AgentName | undefined,
+          track: flags.track as TaskTrack | undefined,
+        });
+        console.log(`\nPipeline Value: $${pv.total.toLocaleString()}`);
+        if (Object.keys(pv.byAgent).length > 0) {
+          console.log(`\nBy Agent:`);
+          for (const [a, v] of Object.entries(pv.byAgent)) {
+            console.log(`  ${a}: $${v.toLocaleString()}`);
+          }
+        }
+        if (Object.keys(pv.byTrack).length > 0) {
+          console.log(`\nBy Track:`);
+          for (const [t, v] of Object.entries(pv.byTrack)) {
+            console.log(`  ${t}: $${v.toLocaleString()}`);
+          }
+        }
+        if (Object.keys(pv.byStatus).length > 0) {
+          console.log(`\nBy Status:`);
+          for (const [s, v] of Object.entries(pv.byStatus)) {
+            console.log(`  ${s}: $${v.toLocaleString()}`);
+          }
+        }
+        break;
+      }
+
+      case 'health': {
+        const agentFilter = flags.agent;
+        const metrics = client.getAgentHealthReport(agentFilter);
+        if (metrics.length === 0) {
+          console.log('No agent health data yet. Status transitions generate health metrics.');
+        } else {
+          console.log(`\nAgent Health Report`);
+          console.log(`${'='.repeat(50)}`);
+          for (const m of metrics) {
+            const cycle = m.avg_cycle_seconds ? `${Math.round(m.avg_cycle_seconds / 60)}min` : 'n/a';
+            console.log(`\n${m.agent_id}:`);
+            console.log(`  Tasks: ${m.total_tasks} | Completed: ${m.completed} (${m.completion_rate}%)`);
+            console.log(`  Active: ${m.active_count} | Blocked: ${m.blocked_count}`);
+            console.log(`  Avg Cycle Time: ${cycle}`);
+          }
+        }
         break;
       }
 

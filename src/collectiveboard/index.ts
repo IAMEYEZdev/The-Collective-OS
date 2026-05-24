@@ -16,3 +16,8 @@ export type {
   TaskTrack,
   WebhookPayload,
 } from './client.js';
+
+export type {
+  AgentHealthMetrics,
+  StatusHistoryEntry,
+} from '../db.js';

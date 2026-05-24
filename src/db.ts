@@ -391,6 +391,20 @@ function createSchema(database: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_board_audit_card ON board_audit_log(card_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_board_audit_agent ON board_audit_log(agent_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_board_audit_time ON board_audit_log(created_at DESC);
+
+    -- Phase 4: Status history (cycle time tracking)
+    CREATE TABLE IF NOT EXISTS board_status_history (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      card_id     TEXT NOT NULL,
+      card_title  TEXT NOT NULL DEFAULT '',
+      agent_id    TEXT NOT NULL DEFAULT 'main',
+      old_status  TEXT NOT NULL DEFAULT '',
+      new_status  TEXT NOT NULL,
+      created_at  INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_status_hist_card ON board_status_history(card_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_status_hist_agent ON board_status_history(agent_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_status_hist_status ON board_status_history(new_status, created_at);
   `);
 }
 
@@ -2518,4 +2532,120 @@ export function getBoardAuditCount(cardId?: string): number {
     return (db.prepare('SELECT COUNT(*) as c FROM board_audit_log WHERE card_id = ?').get(cardId) as { c: number }).c;
   }
   return (db.prepare('SELECT COUNT(*) as c FROM board_audit_log').get() as { c: number }).c;
+}
+
+// ── Phase 4: Status History (Cycle Time Tracking) ───────────────────
+
+export interface StatusHistoryEntry {
+  id: number;
+  card_id: string;
+  card_title: string;
+  agent_id: string;
+  old_status: string;
+  new_status: string;
+  created_at: number;
+}
+
+export function logStatusTransition(
+  cardId: string,
+  cardTitle: string,
+  agentId: string,
+  oldStatus: string,
+  newStatus: string,
+): void {
+  db.prepare(
+    `INSERT INTO board_status_history (card_id, card_title, agent_id, old_status, new_status, created_at)
+     VALUES (?, ?, ?, ?, ?, strftime('%s','now'))`,
+  ).run(cardId, cardTitle, agentId, oldStatus, newStatus);
+}
+
+export function getStatusHistory(cardId: string): StatusHistoryEntry[] {
+  return db.prepare(
+    'SELECT * FROM board_status_history WHERE card_id = ? ORDER BY created_at ASC',
+  ).all(cardId) as StatusHistoryEntry[];
+}
+
+/** Cycle time in seconds between first 'active' and first 'done' for a card */
+export function getCardCycleTime(cardId: string): number | null {
+  const started = db.prepare(
+    `SELECT created_at FROM board_status_history WHERE card_id = ? AND new_status = 'active' ORDER BY created_at ASC LIMIT 1`,
+  ).get(cardId) as { created_at: number } | undefined;
+  const finished = db.prepare(
+    `SELECT created_at FROM board_status_history WHERE card_id = ? AND new_status = 'done' ORDER BY created_at ASC LIMIT 1`,
+  ).get(cardId) as { created_at: number } | undefined;
+  if (!started || !finished) return null;
+  return finished.created_at - started.created_at;
+}
+
+/** Agent health metrics from status history */
+export interface AgentHealthMetrics {
+  agent_id: string;
+  total_tasks: number;
+  completed: number;
+  blocked_count: number;
+  avg_cycle_seconds: number | null;
+  active_count: number;
+  completion_rate: number;
+}
+
+export function getAgentHealth(agentId?: string): AgentHealthMetrics[] {
+  const query = `
+    WITH agent_tasks AS (
+      SELECT DISTINCT card_id, agent_id FROM board_status_history
+      ${agentId ? 'WHERE agent_id = ?' : ''}
+    ),
+    completed AS (
+      SELECT sh.agent_id, sh.card_id
+      FROM board_status_history sh
+      WHERE sh.new_status = 'done'
+      ${agentId ? 'AND sh.agent_id = ?' : ''}
+      GROUP BY sh.agent_id, sh.card_id
+    ),
+    blocked AS (
+      SELECT sh.agent_id, COUNT(DISTINCT sh.card_id) as cnt
+      FROM board_status_history sh
+      WHERE sh.new_status = 'blocked'
+      ${agentId ? 'AND sh.agent_id = ?' : ''}
+      GROUP BY sh.agent_id
+    ),
+    active AS (
+      SELECT sh.agent_id, sh.card_id
+      FROM board_status_history sh
+      INNER JOIN (
+        SELECT card_id, MAX(created_at) as max_t FROM board_status_history GROUP BY card_id
+      ) latest ON sh.card_id = latest.card_id AND sh.created_at = latest.max_t
+      WHERE sh.new_status = 'active'
+      ${agentId ? 'AND sh.agent_id = ?' : ''}
+    ),
+    cycles AS (
+      SELECT s.agent_id, s.card_id,
+        MIN(CASE WHEN s.new_status = 'done' THEN s.created_at END) -
+        MIN(CASE WHEN s.new_status = 'active' THEN s.created_at END) as cycle_secs
+      FROM board_status_history s
+      ${agentId ? 'WHERE s.agent_id = ?' : ''}
+      GROUP BY s.agent_id, s.card_id
+      HAVING cycle_secs > 0
+    )
+    SELECT
+      at.agent_id,
+      COUNT(DISTINCT at.card_id) as total_tasks,
+      (SELECT COUNT(*) FROM completed c WHERE c.agent_id = at.agent_id) as completed,
+      COALESCE((SELECT cnt FROM blocked b WHERE b.agent_id = at.agent_id), 0) as blocked_count,
+      (SELECT AVG(cycle_secs) FROM cycles cy WHERE cy.agent_id = at.agent_id) as avg_cycle_seconds,
+      (SELECT COUNT(*) FROM active ac WHERE ac.agent_id = at.agent_id) as active_count
+    FROM agent_tasks at
+    GROUP BY at.agent_id
+    ORDER BY at.agent_id
+  `;
+
+  const params = agentId ? Array(5).fill(agentId) : [];
+  const rows = db.prepare(query).all(...params) as Array<{
+    agent_id: string; total_tasks: number; completed: number;
+    blocked_count: number; avg_cycle_seconds: number | null; active_count: number;
+  }>;
+
+  return rows.map(r => ({
+    ...r,
+    completion_rate: r.total_tasks > 0 ? Math.round((r.completed / r.total_tasks) * 100) : 0,
+  }));
 }

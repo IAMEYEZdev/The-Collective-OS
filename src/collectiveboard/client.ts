@@ -3,7 +3,8 @@
  * Connects agent task system to visual Kanban dashboard
  */
 
-import { logBoardAudit } from '../db.js';
+import { logBoardAudit, logStatusTransition, getStatusHistory, getCardCycleTime, getAgentHealth } from '../db.js';
+import type { AgentHealthMetrics, StatusHistoryEntry } from '../db.js';
 
 // ── Types ──────────────────────────────────────────────────────────
 
@@ -149,6 +150,18 @@ export const BOARD_PROPERTIES: BoardProperty[] = [
     id: 'prop-due-date',
     name: 'Due Date',
     type: 'date',
+    options: [],
+  },
+  {
+    id: 'prop-revenue',
+    name: 'Revenue',
+    type: 'number',
+    options: [],
+  },
+  {
+    id: 'prop-depends-on',
+    name: 'Depends On',
+    type: 'text',
     options: [],
   },
 ];
@@ -340,9 +353,17 @@ export class CollectiveBoardClient {
     layer?: string;
     goalId?: string;
     missionId?: string;
+    revenue?: number;
+    dependsOn?: string;
   }): Promise<Card> {
     const boardId = await this.ensureBoard();
     const now = Date.now();
+
+    // Dependency validation: if dependsOn specified, verify target exists and isn't done
+    if (opts.dependsOn) {
+      const depCard = await this.getCard(opts.dependsOn);
+      if (!depCard) throw new Error(`Dependency card not found: ${opts.dependsOn}`);
+    }
 
     const properties: Record<string, string> = {
       'prop-agent': AGENT_MAP[opts.agent],
@@ -354,6 +375,8 @@ export class CollectiveBoardClient {
     if (opts.layer && LAYER_MAP[opts.layer]) properties['prop-layer'] = LAYER_MAP[opts.layer];
     if (opts.goalId) properties['prop-goal-id'] = opts.goalId;
     if (opts.missionId) properties['prop-mission-id'] = opts.missionId;
+    if (opts.revenue !== undefined) properties['prop-revenue'] = String(opts.revenue);
+    if (opts.dependsOn) properties['prop-depends-on'] = opts.dependsOn;
 
     const blocks = await this.request<Card[]>('POST', `/boards/${boardId}/blocks`, [{
       title: opts.title,
@@ -372,6 +395,7 @@ export class CollectiveBoardClient {
     const card = blocks[0];
     try {
       logBoardAudit(card.id, opts.title, opts.agent, 'create', '', '', opts.status || 'active');
+      logStatusTransition(card.id, opts.title, opts.agent, '', opts.status || 'active');
     } catch { /* audit is best-effort */ }
     fireWebhook({
       event: 'create', cardId: card.id, cardTitle: opts.title,
@@ -434,6 +458,23 @@ export class CollectiveBoardClient {
       }
     } catch { /* best-effort */ }
 
+    // Dependency gate: can't move to 'active' or 'done' if dependency isn't done
+    try {
+      const card = await this.getCard(cardId);
+      const depId = card?.fields?.properties?.['prop-depends-on'] as string || '';
+      if (depId && (status === 'active' || status === 'done')) {
+        const depCard = await this.getCard(depId);
+        const depStatus = depCard?.fields?.properties?.['prop-status'] as string || '';
+        if (depStatus !== STATUS_MAP.done) {
+          const depLabel = Object.entries(STATUS_MAP).find(([, v]) => v === depStatus)?.[0] || 'unknown';
+          throw new Error(`Blocked by dependency "${depCard?.title || depId}" (status: ${depLabel}). Complete dependency first.`);
+        }
+      }
+    } catch (err) {
+      if (err instanceof Error && err.message.startsWith('Blocked by dependency')) throw err;
+      /* best-effort dep check */
+    }
+
     // Approval gate: review→done requires approver
     if (oldStatus === 'review' && status === 'done' && !opts?.approver) {
       const msg = `Approval required: card "${cardTitle}" (${cardId}) is in review. Use --approver <name> to approve.`;
@@ -456,6 +497,7 @@ export class CollectiveBoardClient {
       const auditAction = opts?.approver ? 'approved' : 'status_change';
       const auditNew = opts?.approver ? `${status} (by ${opts.approver})` : status;
       logBoardAudit(cardId, card?.title || '', this.config.username, auditAction, 'status', oldStatus, auditNew);
+      logStatusTransition(cardId, card?.title || cardTitle, this.config.username, oldStatus, status);
     } catch { /* audit is best-effort */ }
     fireWebhook({
       event: opts?.approver ? 'approved' : 'status_change',
@@ -594,6 +636,95 @@ export class CollectiveBoardClient {
     };
   }
 
+  // ── Revenue ─────────────────────────────────────────────────────
+
+  async setRevenue(cardId: string, amount: number): Promise<void> {
+    const card = await this.getCard(cardId);
+    await this.patchCard(cardId, { 'prop-revenue': String(amount) });
+    try {
+      logBoardAudit(cardId, card?.title || '', this.config.username, 'revenue_set', 'revenue',
+        card?.fields?.properties?.['prop-revenue'] as string || '0', String(amount));
+    } catch { /* best-effort */ }
+    fireWebhook({
+      event: 'revenue_set', cardId, cardTitle: card?.title || '',
+      agent: this.config.username, field: 'revenue',
+      oldValue: card?.fields?.properties?.['prop-revenue'] as string || '0',
+      newValue: String(amount),
+      timestamp: Math.floor(Date.now() / 1000),
+    });
+  }
+
+  /** Pipeline value: sum of revenue on non-done cards */
+  async getPipelineValue(filters?: { agent?: AgentName; track?: TaskTrack }): Promise<{
+    total: number;
+    byAgent: Record<string, number>;
+    byTrack: Record<string, number>;
+    byStatus: Record<string, number>;
+  }> {
+    const all = await this.getAllTasks();
+    const result = { total: 0, byAgent: {} as Record<string, number>, byTrack: {} as Record<string, number>, byStatus: {} as Record<string, number> };
+
+    for (const card of all) {
+      const props = card.fields?.properties || {};
+      const rev = parseFloat(props['prop-revenue'] as string || '0');
+      if (rev <= 0) continue;
+
+      if (filters?.agent && props['prop-agent'] !== AGENT_MAP[filters.agent]) continue;
+      if (filters?.track && props['prop-track'] !== TRACK_MAP[filters.track]) continue;
+
+      const agent = Object.entries(AGENT_MAP).find(([, v]) => v === (props['prop-agent'] as string))?.[0] || 'unknown';
+      const track = Object.entries(TRACK_MAP).find(([, v]) => v === (props['prop-track'] as string))?.[0] || 'untracked';
+      const status = Object.entries(STATUS_MAP).find(([, v]) => v === (props['prop-status'] as string))?.[0] || 'unknown';
+
+      result.total += rev;
+      result.byAgent[agent] = (result.byAgent[agent] || 0) + rev;
+      result.byTrack[track] = (result.byTrack[track] || 0) + rev;
+      result.byStatus[status] = (result.byStatus[status] || 0) + rev;
+    }
+
+    return result;
+  }
+
+  // ── Dependencies ───────────────────────────────────────────────
+
+  async setDependency(cardId: string, dependsOnId: string): Promise<void> {
+    // Verify target exists
+    const dep = await this.getCard(dependsOnId);
+    if (!dep) throw new Error(`Dependency card not found: ${dependsOnId}`);
+
+    // Circular check: dependsOnId must not depend on cardId
+    const depDep = dep.fields?.properties?.['prop-depends-on'] as string || '';
+    if (depDep === cardId) throw new Error(`Circular dependency: ${dependsOnId} already depends on ${cardId}`);
+
+    await this.patchCard(cardId, { 'prop-depends-on': dependsOnId });
+    try {
+      const card = await this.getCard(cardId);
+      logBoardAudit(cardId, card?.title || '', this.config.username, 'dependency_set', 'depends-on', '', dependsOnId);
+    } catch { /* best-effort */ }
+  }
+
+  /** Get cards that depend on this card */
+  async getDependents(cardId: string): Promise<Card[]> {
+    const all = await this.getAllTasks();
+    return all.filter(c => (c.fields?.properties?.['prop-depends-on'] as string) === cardId);
+  }
+
+  // ── Time Tracking / History ────────────────────────────────────
+
+  getTaskHistory(cardId: string): StatusHistoryEntry[] {
+    return getStatusHistory(cardId);
+  }
+
+  getTaskCycleTime(cardId: string): number | null {
+    return getCardCycleTime(cardId);
+  }
+
+  // ── Agent Health ───────────────────────────────────────────────
+
+  getAgentHealthReport(agentId?: string): AgentHealthMetrics[] {
+    return getAgentHealth(agentId);
+  }
+
   async getBoard(): Promise<Board | null> {
     if (!this.boardId) await this.ensureBoard();
     if (!this.boardId) return null;
@@ -607,11 +738,16 @@ export class CollectiveBoardClient {
     byStatus: Record<TaskStatus, number>;
     byAgent: Record<AgentName, number>;
     blocked: Card[];
+    pipelineValue: number;
+    revenueByAgent: Record<string, number>;
+    health: AgentHealthMetrics[];
   }> {
     const all = await this.getAllTasks();
 
     const byStatus = { backlog: 0, active: 0, blocked: 0, review: 0, done: 0 };
     const byAgent = { melanie: 0, james: 0, annika: 0, sean: 0, melissa: 0, jackson: 0 };
+    const revenueByAgent: Record<string, number> = {};
+    let pipelineValue = 0;
 
     const blocked: Card[] = [];
 
@@ -626,15 +762,23 @@ export class CollectiveBoardClient {
         }
       }
 
-      // Count by agent
+      // Count by agent + revenue
       for (const [agent, optId] of Object.entries(AGENT_MAP)) {
         if (props['prop-agent'] === optId) {
           byAgent[agent as AgentName]++;
+          const rev = parseFloat(props['prop-revenue'] as string || '0');
+          if (rev > 0) {
+            pipelineValue += rev;
+            revenueByAgent[agent] = (revenueByAgent[agent] || 0) + rev;
+          }
         }
       }
     }
 
-    return { total: all.length, byStatus, byAgent, blocked };
+    let health: AgentHealthMetrics[] = [];
+    try { health = getAgentHealth(); } catch { /* best-effort */ }
+
+    return { total: all.length, byStatus, byAgent, blocked, pipelineValue, revenueByAgent, health };
   }
 }
 
