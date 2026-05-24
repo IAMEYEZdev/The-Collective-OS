@@ -23,6 +23,7 @@ import {
 } from './db.js';
 import Database from 'better-sqlite3';
 import path from 'path';
+import { getClient, type AgentName } from './collectiveboard/index.js';
 
 // Resolve project root: use CLAUDECLAW_PROJECT_ROOT env var (set by the Node process),
 // fall back to the directory containing this compiled JS file (dist/ -> parent).
@@ -50,6 +51,15 @@ const CHAT_ID_OVERRIDE = chatFlagIdx !== -1 && process.argv[chatFlagIdx + 1]
   ? process.argv[chatFlagIdx + 1]!
   : undefined;
 
+// Parse --limit flag for entry count override
+const limitFlagIdx = process.argv.indexOf('--limit');
+const LIMIT_OVERRIDE = limitFlagIdx !== -1 && process.argv[limitFlagIdx + 1]
+  ? parseInt(process.argv[limitFlagIdx + 1]!, 10)
+  : undefined;
+
+// Parse --board flag (boolean, no value) to push log entry to CollectiveBoard
+const BOARD_SYNC = process.argv.includes('--board');
+
 // Get chat ID from DB if not provided
 function getChatId(): string {
   if (CHAT_ID_OVERRIDE) return CHAT_ID_OVERRIDE;
@@ -63,15 +73,17 @@ function getChatId(): string {
   }
 }
 
-// Strip --agent and --chat flags from argv to get positional args
+// Strip --agent, --chat, --limit, and --board flags from argv to get positional args
 const filteredArgs = process.argv.slice(2).filter((_, i, arr) => {
-  if (arr[i] === '--agent' || arr[i] === '--chat') return false;
-  if (i > 0 && (arr[i - 1] === '--agent' || arr[i - 1] === '--chat')) return false;
+  if (arr[i] === '--agent' || arr[i] === '--chat' || arr[i] === '--limit') return false;
+  if (arr[i] === '--board') return false;
+  if (i > 0 && (arr[i - 1] === '--agent' || arr[i - 1] === '--chat' || arr[i - 1] === '--limit')) return false;
   return true;
 });
 
 const command = filteredArgs[0];
 
+(async () => {
 switch (command) {
   case 'log': {
     const action = filteredArgs[1];
@@ -86,11 +98,30 @@ switch (command) {
     const chatId = getChatId();
     logToHiveMind(AGENT_ID, chatId, action, summary, artifacts);
     console.log(`Logged to hive mind: [${AGENT_ID}] ${action} — ${summary.slice(0, 80)}`);
+
+    // Best-effort: push to CollectiveBoard when --board flag present
+    if (BOARD_SYNC) {
+      const validAgents = ['melanie', 'james', 'annika', 'sean', 'melissa', 'jackson'];
+      const agentName = validAgents.includes(AGENT_ID) ? AGENT_ID as AgentName : 'melanie';
+      try {
+        const board = getClient();
+        const card = await board.createTask({
+          title: `[${action}] ${summary.slice(0, 80)}`,
+          agent: agentName,
+          status: 'active',
+          priority: 'normal',
+          track: 'internal',
+        });
+        console.log(`Board synced: card ${card.id}`);
+      } catch (err) {
+        console.error(`Board sync failed: ${(err as Error).message}`);
+      }
+    }
     break;
   }
 
   case 'read': {
-    const limit = parseInt(filteredArgs[1] || '20', 10);
+    const limit = LIMIT_OVERRIDE ?? parseInt(filteredArgs[1] || '20', 10);
     const db = getDb();
     const rows = db.prepare(
       `SELECT agent_id, action, summary, created_at
@@ -227,3 +258,4 @@ switch (command) {
     console.error('  session-info                          — show session and chat ID');
     process.exit(1);
 }
+})().catch(err => { console.error(err); process.exit(1); });

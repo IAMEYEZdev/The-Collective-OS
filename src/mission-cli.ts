@@ -21,6 +21,7 @@ import {
   getMissionTask,
   cancelMissionTask,
 } from './db.js';
+import { getClient, type AgentName } from './collectiveboard/index.js';
 
 initDatabase();
 
@@ -67,6 +68,7 @@ function formatDate(unix: number | null): string {
   });
 }
 
+(async () => {
 switch (command) {
   case 'create': {
     const prompt = rest[0];
@@ -83,6 +85,25 @@ switch (command) {
     console.log(`  Agent:    ${targetAgent || 'unassigned (use dashboard to assign)'}`);
     console.log(`  Priority: ${priorityArg}`);
     console.log(`  Prompt:   ${prompt.slice(0, 100)}${prompt.length > 100 ? '...' : ''}`);
+
+    // Best-effort: push to CollectiveBoard
+    if (targetAgent) {
+      try {
+        const board = getClient();
+        const priorityName = priorityArg >= 8 ? 'critical' : priorityArg >= 6 ? 'high' : priorityArg >= 3 ? 'normal' : 'low';
+        const card = await board.createTask({
+          title,
+          agent: targetAgent as AgentName,
+          status: 'active',
+          priority: priorityName,
+          track: 'internal',
+          missionId: id,
+        });
+        console.log(`  Board:    synced (card ${card.id})`);
+      } catch (err) {
+        console.error(`  Board:    sync failed (${(err as Error).message})`);
+      }
+    }
     break;
   }
 
@@ -126,6 +147,21 @@ switch (command) {
     if (!id) { console.error('Usage: mission-cli cancel <id>'); process.exit(1); }
     const ok = cancelMissionTask(id);
     console.log(ok ? `Cancelled task: ${id}` : `Could not cancel (may already be completed): ${id}`);
+
+    // Best-effort: find and block matching board card
+    if (ok) {
+      try {
+        const board = getClient();
+        const cards = await board.getAllTasks();
+        const match = cards.find(c => c.fields?.properties?.['prop-mission-id'] === id);
+        if (match) {
+          await board.blockTask(match.id);
+          console.log(`  Board:    card ${match.id} blocked`);
+        }
+      } catch (err) {
+        console.error(`  Board:    sync failed (${(err as Error).message})`);
+      }
+    }
     break;
   }
 
@@ -133,3 +169,4 @@ switch (command) {
     console.error('Commands: create | list | result | cancel');
     process.exit(1);
 }
+})().catch(err => { console.error(err); process.exit(1); });
