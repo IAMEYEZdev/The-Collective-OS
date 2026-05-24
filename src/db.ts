@@ -375,6 +375,22 @@ function createSchema(database: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_pending_uplift_status ON pending_uplift(status);
     CREATE INDEX IF NOT EXISTS idx_pending_uplift_business ON pending_uplift(business_tags);
     CREATE INDEX IF NOT EXISTS idx_pending_uplift_created ON pending_uplift(created_at);
+
+    -- Phase 3: CollectiveBoard audit log (mutation history)
+    CREATE TABLE IF NOT EXISTS board_audit_log (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      card_id     TEXT NOT NULL,
+      card_title  TEXT NOT NULL DEFAULT '',
+      agent_id    TEXT NOT NULL DEFAULT 'main',
+      action      TEXT NOT NULL,           -- create | update | delete | status_change | reassign | complete | block
+      field       TEXT NOT NULL DEFAULT '', -- which field changed (e.g. 'status', 'agent')
+      old_value   TEXT NOT NULL DEFAULT '',
+      new_value   TEXT NOT NULL DEFAULT '',
+      created_at  INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_board_audit_card ON board_audit_log(card_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_board_audit_agent ON board_audit_log(agent_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_board_audit_time ON board_audit_log(created_at DESC);
   `);
 }
 
@@ -2446,4 +2462,60 @@ export function getWarRoomTranscript(meetingId: string): Array<{
   return db.prepare(
     'SELECT speaker, text, created_at FROM warroom_transcript WHERE meeting_id = ? ORDER BY created_at',
   ).all(meetingId) as any[];
+}
+
+// ── CollectiveBoard Audit Log ─────────────────────────────────────
+
+export interface BoardAuditEntry {
+  id: number;
+  card_id: string;
+  card_title: string;
+  agent_id: string;
+  action: string;
+  field: string;
+  old_value: string;
+  new_value: string;
+  created_at: number;
+}
+
+export function logBoardAudit(
+  cardId: string,
+  cardTitle: string,
+  agentId: string,
+  action: string,
+  field = '',
+  oldValue = '',
+  newValue = '',
+): void {
+  db.prepare(
+    `INSERT INTO board_audit_log (card_id, card_title, agent_id, action, field, old_value, new_value, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, strftime('%s','now'))`,
+  ).run(cardId, cardTitle, agentId, action, field, oldValue, newValue);
+}
+
+export function getBoardAuditLog(
+  limit = 20,
+  cardId?: string,
+  agentId?: string,
+): BoardAuditEntry[] {
+  if (cardId) {
+    return db.prepare(
+      'SELECT * FROM board_audit_log WHERE card_id = ? ORDER BY created_at DESC LIMIT ?',
+    ).all(cardId, limit) as BoardAuditEntry[];
+  }
+  if (agentId) {
+    return db.prepare(
+      'SELECT * FROM board_audit_log WHERE agent_id = ? ORDER BY created_at DESC LIMIT ?',
+    ).all(agentId, limit) as BoardAuditEntry[];
+  }
+  return db.prepare(
+    'SELECT * FROM board_audit_log ORDER BY created_at DESC LIMIT ?',
+  ).all(limit) as BoardAuditEntry[];
+}
+
+export function getBoardAuditCount(cardId?: string): number {
+  if (cardId) {
+    return (db.prepare('SELECT COUNT(*) as c FROM board_audit_log WHERE card_id = ?').get(cardId) as { c: number }).c;
+  }
+  return (db.prepare('SELECT COUNT(*) as c FROM board_audit_log').get() as { c: number }).c;
 }

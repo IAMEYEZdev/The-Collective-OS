@@ -13,6 +13,7 @@
  *   node dist/hive-cli.js checkpoint "summary text"           — save checkpoint memory
  *   node dist/hive-cli.js search-memory "keyword"             — search conversation log
  *   node dist/hive-cli.js session-info                        — current session ID and chat ID
+ *   node dist/hive-cli.js board-audit [--card <id>] [--limit N] — board mutation history
  */
 
 import {
@@ -20,6 +21,8 @@ import {
   logToHiveMind,
   getOtherAgentActivity,
   saveTokenUsage,
+  getBoardAuditLog,
+  getBoardAuditCount,
 } from './db.js';
 import Database from 'better-sqlite3';
 import path from 'path';
@@ -246,6 +249,32 @@ switch (command) {
     break;
   }
 
+  case 'board-audit': {
+    const cardFilter = filteredArgs[1] === '--card' ? filteredArgs[2] : undefined;
+    const agentFilter = filteredArgs[1] === '--agent-filter' ? filteredArgs[2] : undefined;
+    const limit = LIMIT_OVERRIDE ?? 20;
+
+    const entries = getBoardAuditLog(limit, cardFilter, agentFilter);
+    const total = getBoardAuditCount(cardFilter);
+
+    if (entries.length === 0) {
+      console.log('No board audit entries found.');
+      break;
+    }
+
+    console.log(`Board audit log (${entries.length} of ${total} total):\n`);
+    for (const e of entries) {
+      const time = new Date(e.created_at * 1000).toLocaleString();
+      const detail = e.field
+        ? `${e.field}: "${e.old_value}" -> "${e.new_value}"`
+        : '';
+      console.log(`${time} | ${e.action} | @${e.agent_id} | ${e.card_title.slice(0, 50)}`);
+      if (detail) console.log(`  ${detail}`);
+      console.log(`  card: ${e.card_id}`);
+    }
+    break;
+  }
+
   default:
     console.error(`Unknown command: ${command || '(none)'}`);
     console.error('');
@@ -256,6 +285,7 @@ switch (command) {
     console.error('  checkpoint "summary"                  — save checkpoint memory');
     console.error('  search-memory "keyword"               — search conversation log');
     console.error('  session-info                          — show session and chat ID');
+    console.error('  board-audit [--card <id>] [--limit N] — board mutation history');
     process.exit(1);
 }
 })().catch(err => { console.error(err); process.exit(1); });
