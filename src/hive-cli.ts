@@ -8,6 +8,7 @@
  * Usage:
  *   node dist/hive-cli.js log "action" "summary"              — write to hive mind
  *   node dist/hive-cli.js log "action" "summary" "artifacts"  — write with artifacts
+ *   node dist/hive-cli.js log ... --hemisphere biz|eng|xhemi  — route via clawhip channel
  *   node dist/hive-cli.js read [N]                            — read last N hive mind entries (default 20)
  *   node dist/hive-cli.js convolife                           — context window stats
  *   node dist/hive-cli.js checkpoint "summary text"           — save checkpoint memory
@@ -63,6 +64,60 @@ const LIMIT_OVERRIDE = limitFlagIdx !== -1 && process.argv[limitFlagIdx + 1]
 // Parse --board flag (boolean, no value) to push log entry to CollectiveBoard
 const BOARD_SYNC = process.argv.includes('--board');
 
+// Parse --hemisphere flag for clawhip channel routing (biz|eng|xhemi, default biz)
+const hemiFlagIdx = process.argv.indexOf('--hemisphere');
+const HEMISPHERE: 'biz' | 'eng' | 'xhemi' = (() => {
+  const val = hemiFlagIdx !== -1 && process.argv[hemiFlagIdx + 1]
+    ? process.argv[hemiFlagIdx + 1]!
+    : process.env.CLAUDECLAW_HEMISPHERE || 'biz';
+  if (val === 'eng' || val === 'xhemi') return val;
+  return 'biz';
+})();
+
+// Clawhip daemon base URL — event routing via channel_template resolution
+const CLAWHIP_URL = process.env.CLAWHIP_URL || 'http://127.0.0.1:25294';
+
+/**
+ * Fire event to clawhip daemon for channel-routed dispatch.
+ * Best-effort: clawhip down = warning, not failure. Hive log is source of truth.
+ */
+async function emitClawhipEvent(
+  agentId: string,
+  hemisphere: string,
+  action: string,
+  summary: string,
+  artifacts?: string,
+): Promise<void> {
+  const payload = {
+    type: 'hive.log',
+    payload: {
+      agent_name: agentId,
+      hemisphere,
+      action,
+      summary: summary.slice(0, 500),
+      ...(artifacts ? { artifacts } : {}),
+      timestamp: new Date().toISOString(),
+    },
+  };
+
+  try {
+    const resp = await fetch(`${CLAWHIP_URL}/event`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(3000),
+    });
+    if (resp.ok) {
+      console.log(`Clawhip routed: ${hemisphere}.${agentId}`);
+    } else {
+      console.error(`Clawhip rejected (${resp.status}): ${await resp.text().catch(() => 'no body')}`);
+    }
+  } catch (err) {
+    // Clawhip down is non-fatal — hive log already persisted to SQLite
+    console.error(`Clawhip unreachable: ${(err as Error).message}`);
+  }
+}
+
 // Get chat ID from DB if not provided
 function getChatId(): string {
   if (CHAT_ID_OVERRIDE) return CHAT_ID_OVERRIDE;
@@ -76,11 +131,11 @@ function getChatId(): string {
   }
 }
 
-// Strip --agent, --chat, --limit, and --board flags from argv to get positional args
+// Strip --agent, --chat, --limit, --board, and --hemisphere flags from argv to get positional args
 const filteredArgs = process.argv.slice(2).filter((_, i, arr) => {
-  if (arr[i] === '--agent' || arr[i] === '--chat' || arr[i] === '--limit') return false;
+  if (arr[i] === '--agent' || arr[i] === '--chat' || arr[i] === '--limit' || arr[i] === '--hemisphere') return false;
   if (arr[i] === '--board') return false;
-  if (i > 0 && (arr[i - 1] === '--agent' || arr[i - 1] === '--chat' || arr[i - 1] === '--limit')) return false;
+  if (i > 0 && (arr[i - 1] === '--agent' || arr[i - 1] === '--chat' || arr[i - 1] === '--limit' || arr[i - 1] === '--hemisphere')) return false;
   return true;
 });
 
@@ -98,9 +153,51 @@ switch (command) {
       process.exit(1);
     }
 
+    // Hive Log Gate (Universal) — see docs/sops/ and quality-gate skill.
+    // Reject empty / boilerplate / under-spec summaries. Force H1+H2+H3 discipline.
+    // Bypass only via CLAUDECLAW_HIVE_BYPASS=1 (audit-visible).
+    const bypass = process.env.CLAUDECLAW_HIVE_BYPASS === '1';
+    if (!bypass) {
+      const trimmed = summary.trim();
+      const lowered = trimmed.toLowerCase();
+      const rejectPatterns = [
+        'no summary produced',
+        '(no summary produced)',
+        '(no summary)',
+        'no summary',
+        'n/a',
+        'na',
+        'tbd',
+        'todo',
+      ];
+      const isRejectedExact = rejectPatterns.includes(lowered);
+      const wordCount = trimmed.split(/\s+/).filter(Boolean).length;
+      const repeatsAction = lowered === action.trim().toLowerCase();
+
+      let failReason: string | null = null;
+      if (trimmed.length === 0) failReason = 'empty summary';
+      else if (isRejectedExact) failReason = `boilerplate summary: "${trimmed}"`;
+      else if (trimmed.length < 20) failReason = `summary too short (${trimmed.length} chars, min 20)`;
+      else if (wordCount < 4) failReason = `summary too thin (${wordCount} words, min 4)`;
+      else if (repeatsAction) failReason = 'summary repeats action verb with no detail';
+
+      if (failReason) {
+        console.error(`HIVE LOG REJECTED [${AGENT_ID}]: ${failReason}`);
+        console.error('Required format: "Did <X>. Verified via <gate/check>. Open: <next/closed>."');
+        console.error('See: docs/sops/ + quality-gate skill (Hive Log Gate H1+H2+H3).');
+        console.error('Bypass (audit-visible): set CLAUDECLAW_HIVE_BYPASS=1');
+        process.exit(2);
+      }
+    }
+
     const chatId = getChatId();
     logToHiveMind(AGENT_ID, chatId, action, summary, artifacts);
     console.log(`Logged to hive mind: [${AGENT_ID}] ${action} — ${summary.slice(0, 80)}`);
+
+    // Best-effort: route through clawhip for channel-based dispatch
+    // Event payload carries agent_name + hemisphere — clawhip's channel_template
+    // resolves "{hemisphere}.{agent_name}" via channel_mapping to Discord channel ID
+    await emitClawhipEvent(AGENT_ID, HEMISPHERE, action, summary, artifacts);
 
     // Best-effort: push to CollectiveBoard when --board flag present
     if (BOARD_SYNC) {

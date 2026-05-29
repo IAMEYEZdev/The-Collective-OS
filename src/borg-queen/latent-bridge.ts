@@ -27,7 +27,13 @@ import type { DepthOverride } from '../ax/types.js';
 /** Agent participation definition in a cluster */
 export interface ClusterParticipant {
   agentId: string;
-  layer: 'L1' | 'L2' | 'L3' | 'L4' | 'L5' | 'L6';
+  /**
+   * Layer assignment. Standard layers: L1-L6.
+   * Neo namespace: 'neo/<agent>' for cross-hemisphere engineering agents
+   * dispatched via QM→Neo file-bus. Neo agents route to structural+reasoning
+   * segments (code work + problem-solving).
+   */
+  layer: 'L1' | 'L2' | 'L3' | 'L4' | 'L5' | 'L6' | `neo/${string}`;
   /** Weight for global state aggregation (0-1, higher = more influence) */
   weight: number;
   /** Whether this agent produces latent states (vs text-only) */
@@ -161,6 +167,22 @@ const LAYER_SEGMENT_MAP: Record<string, { start: number; end: number }> = {
   L6: GLOBAL_SEGMENTS.coordination,
 };
 
+/**
+ * Neo namespace segment routing.
+ * Cross-hemisphere engineering agents (neo/*) blend into structural + reasoning
+ * segments since they perform code work (L1) and problem-solving (L5).
+ * Split: 60% structural, 40% reasoning.
+ */
+const NEO_SEGMENT_BLEND = [
+  { segment: GLOBAL_SEGMENTS.structural, weight: 0.6 },
+  { segment: GLOBAL_SEGMENTS.reasoning, weight: 0.4 },
+] as const;
+
+/** Check if a layer string is a neo-namespaced agent */
+function isNeoLayer(layer: string): boolean {
+  return layer.startsWith('neo/');
+}
+
 // ── Mod 1: RecursiveMAS Cluster Initializer ────────────────────────────
 
 /**
@@ -182,10 +204,13 @@ export function initializeCluster(opts: {
   const maxRounds = RECURSION_DEPTH_MAP[complexity];
 
   // Assign default weights: latent-capable agents get higher weight
+  // Neo agents get slightly reduced weight (cross-hemisphere latency cost)
   const participants: ClusterParticipant[] = opts.participants.map((p) => ({
     agentId: p.agentId,
     layer: p.layer as ClusterParticipant['layer'],
-    weight: p.latentCapable !== false ? 1.0 : 0.5,
+    weight: p.latentCapable !== false
+      ? (isNeoLayer(p.layer) ? 0.8 : 1.0)
+      : 0.5,
     latentCapable: p.latentCapable !== false,
   }));
 
@@ -266,10 +291,19 @@ export function aggregateGlobalState(
     const segment = LAYER_SEGMENT_MAP[agentState.layer];
 
     if (segment) {
-      // Route to layer-specific segment
+      // Route to layer-specific segment (standard L1-L6)
       const segLen = segment.end - segment.start;
       for (let i = 0; i < segLen && i < agentState.hiddenState.length; i++) {
         globalState[segment.start + i] += agentState.hiddenState[i] * weight;
+      }
+    } else if (isNeoLayer(agentState.layer)) {
+      // Neo namespace: blend into structural + reasoning segments
+      for (const blend of NEO_SEGMENT_BLEND) {
+        const segLen = blend.segment.end - blend.segment.start;
+        for (let i = 0; i < segLen && i < agentState.hiddenState.length; i++) {
+          globalState[blend.segment.start + i] +=
+            agentState.hiddenState[i] * weight * blend.weight;
+        }
       }
     } else {
       // Unknown layer: distribute across full vector with reduced weight
@@ -630,6 +664,17 @@ export function gapsToBorgArcContext(
     }
     layerPriorities[layer] = Math.sqrt(energy / (segment.end - segment.start));
   }
+
+  // Neo composite priority: weighted blend of structural + reasoning energy
+  let neoEnergy = 0;
+  for (const blend of NEO_SEGMENT_BLEND) {
+    let segEnergy = 0;
+    for (let i = blend.segment.start; i < blend.segment.end; i++) {
+      segEnergy += gapSignal[i] * gapSignal[i];
+    }
+    neoEnergy += Math.sqrt(segEnergy / (blend.segment.end - blend.segment.start)) * blend.weight;
+  }
+  layerPriorities['neo'] = neoEnergy;
 
   return { gapSignal, layerPriorities };
 }
