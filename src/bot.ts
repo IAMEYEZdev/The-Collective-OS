@@ -124,6 +124,27 @@ import {
 } from './voice.js';
 import { getSlackConversations, getSlackMessages, sendSlackMessage, SlackConversation } from './slack.js';
 import { getWaChats, getWaChatMessages, sendWhatsAppMessage, WaChat } from './whatsapp.js';
+import { ClawCodeRAGClient } from './borg-arc/adapters/claw-code-rag.js';
+
+/** RAG client for claw-code context enrichment in interactive messages. */
+const botRagClient = process.env.CLAW_RAG_URL
+  ? new ClawCodeRAGClient(process.env.CLAW_RAG_URL)
+  : null;
+
+/** Enrich user message with claw-code RAG context if available. */
+async function enrichWithRAG(message: string): Promise<string> {
+  if (!botRagClient) return message;
+  try {
+    const healthy = await botRagClient.health();
+    if (!healthy) return message;
+    const chunks = await botRagClient.query(message, 2);
+    if (chunks.length === 0) return message;
+    const context = chunks.map((c) => `[${c.source}]: ${c.text.slice(0, 300)}`).join('\n');
+    return `[Claw-Code Context]\n${context}\n\n${message}`;
+  } catch {
+    return message;
+  }
+}
 
 // Per-chat voice mode toggle (in-memory, resets on restart)
 const voiceEnabledChats = new Set<string>();
@@ -596,6 +617,9 @@ async function handleMessage(ctx: Context, message: string, forceVoiceReply = fa
   } catch (err) {
     logger.error({ err }, 'Context enrichment failed — continuing without enrichment');
   }
+
+  // Claw-code RAG enrichment
+  fullMessage = await enrichWithRAG(fullMessage);
 
   // Smart model routing: use cheap model for simple acknowledgments
   const userModel = chatModelOverride.get(chatIdStr) ?? agentDefaultModel;
@@ -1851,6 +1875,9 @@ async function processDashboardMessage(
     } catch (err) {
       logger.error({ err }, 'Dashboard context enrichment failed — continuing without');
     }
+
+    // Claw-code RAG enrichment (dashboard path)
+    fullMessage = await enrichWithRAG(fullMessage);
 
     const onProgress = (event: AgentProgressEvent) => {
       emitChatEvent({ type: 'progress', chatId: chatIdStr, description: event.description });

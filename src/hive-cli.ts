@@ -15,6 +15,7 @@
  *   node dist/hive-cli.js search-memory "keyword"             — search conversation log
  *   node dist/hive-cli.js session-info                        — current session ID and chat ID
  *   node dist/hive-cli.js board-audit [--card <id>] [--limit N] — board mutation history
+ *   node dist/hive-cli.js claw-health                          — claw-code integration health check
  */
 
 import {
@@ -372,6 +373,41 @@ switch (command) {
     break;
   }
 
+  case 'claw-health': {
+    const ragUrl = process.env.CLAW_RAG_URL || 'http://localhost:8787';
+    const binPath = process.env.CLAW_CODE_BIN || 'claw';
+
+    // Check binary
+    let binaryOk = false;
+    let version = 'unknown';
+    try {
+      const { execSync } = await import('child_process');
+      const out = execSync(`"${binPath}" --version`, { encoding: 'utf-8', timeout: 5000 });
+      binaryOk = true;
+      version = out.trim();
+    } catch { /* binary unavailable */ }
+
+    // Check RAG
+    let ragOk = false;
+    let ragChunks = 0;
+    try {
+      const res = await fetch(`${ragUrl}/health`);
+      ragOk = res.ok;
+      if (ragOk) {
+        const statsRes = await fetch(`${ragUrl}/v1/stats`);
+        const stats = await statsRes.json() as Record<string, number>;
+        ragChunks = stats.chunks || 0;
+      }
+    } catch { /* rag unavailable */ }
+
+    console.log('Claw-Code Health Report');
+    console.log(`  Binary: ${binaryOk ? 'OK' : 'MISSING'} (${version})`);
+    console.log(`  RAG Service: ${ragOk ? 'OK' : 'DOWN'}`);
+    console.log(`  RAG Chunks: ${ragChunks}`);
+    console.log(`  Qdrant: ${ragOk ? 'OK (via RAG)' : 'UNKNOWN'}`);
+    break;
+  }
+
   default:
     console.error(`Unknown command: ${command || '(none)'}`);
     console.error('');
@@ -383,6 +419,7 @@ switch (command) {
     console.error('  search-memory "keyword"               — search conversation log');
     console.error('  session-info                          — show session and chat ID');
     console.error('  board-audit [--card <id>] [--limit N] — board mutation history');
+    console.error('  claw-health                           — claw-code integration health check');
     process.exit(1);
 }
 })().catch(err => { console.error(err); process.exit(1); });

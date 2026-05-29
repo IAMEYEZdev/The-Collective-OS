@@ -20,8 +20,14 @@ import { messageQueue } from './message-queue.js';
 import { runAgent } from './agent.js';
 import { formatForTelegram, splitMessage } from './bot.js';
 import { enrichPrompt } from './context-injector/index.js';
+import { ClawCodeRAGClient } from './borg-arc/adapters/claw-code-rag.js';
 
 type Sender = (text: string) => Promise<void>;
+
+/** RAG client for claw-code context enrichment. Initialised only when CLAW_RAG_URL is set. */
+const ragClient = process.env.CLAW_RAG_URL
+  ? new ClawCodeRAGClient(process.env.CLAW_RAG_URL)
+  : null;
 
 /** Max time (ms) a scheduled/mission task can run before being killed. Configurable via TASK_TIMEOUT_MINUTES in .env. */
 const TASK_TIMEOUT_MS = (parseInt(process.env.TASK_TIMEOUT_MINUTES || '25', 10)) * 60 * 1000;
@@ -119,6 +125,23 @@ async function runDueTasks(): Promise<void> {
           }, 'Scheduled task prompt enriched with context');
         }
 
+        // Enrich with claw-code RAG context if available
+        if (ragClient) {
+          try {
+            const healthy = await ragClient.health();
+            if (healthy) {
+              const ragResults = await ragClient.query(enrichment.prompt, 3);
+              if (ragResults.length > 0) {
+                const ragContext = ragResults.map((r) => `[${r.source}]: ${r.text.slice(0, 300)}`).join('\n');
+                enrichment.prompt = `[Claw-Code Context]\n${ragContext}\n\n${enrichment.prompt}`;
+                logger.info({ taskId: task.id, ragHits: ragResults.length }, 'Prompt enriched with claw-code RAG context');
+              }
+            }
+          } catch (ragErr) {
+            logger.warn({ err: ragErr }, 'Claw-code RAG enrichment failed, continuing without');
+          }
+        }
+
         // Run as a fresh agent call (no session — scheduled tasks are autonomous)
         const result = await runAgent(enrichment.prompt, undefined, () => {}, undefined, undefined, abortController, undefined, agentMcpAllowlist);
         clearTimeout(timeout);
@@ -190,6 +213,23 @@ async function runDueMissionTasks(): Promise<void> {
           contextSources: enrichment.sources,
           entryCount: enrichment.injection.entryCount,
         }, 'Mission prompt enriched with context');
+      }
+
+      // Enrich with claw-code RAG context if available
+      if (ragClient) {
+        try {
+          const healthy = await ragClient.health();
+          if (healthy) {
+            const ragResults = await ragClient.query(enrichment.prompt, 3);
+            if (ragResults.length > 0) {
+              const ragContext = ragResults.map((r) => `[${r.source}]: ${r.text.slice(0, 300)}`).join('\n');
+              enrichment.prompt = `[Claw-Code Context]\n${ragContext}\n\n${enrichment.prompt}`;
+              logger.info({ missionId: mission.id, ragHits: ragResults.length }, 'Prompt enriched with claw-code RAG context');
+            }
+          }
+        } catch (ragErr) {
+          logger.warn({ err: ragErr }, 'Claw-code RAG enrichment failed, continuing without');
+        }
       }
 
       const result = await runAgent(enrichment.prompt, undefined, () => {}, undefined, undefined, abortController, undefined, agentMcpAllowlist);

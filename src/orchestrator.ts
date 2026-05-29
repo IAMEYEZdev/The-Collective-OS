@@ -61,6 +61,10 @@ import type {
   BorgQueenReport,
   PreScreeningSignal,
 } from './borg-arc/latent-bridge.js';
+import { ClawCodeAdapter } from './borg-arc/adapters/claw-code-adapter.js';
+import { ClawCodeRAGClient } from './borg-arc/adapters/claw-code-rag.js';
+import { ClawCodeEventBridge } from './borg-arc/adapters/claw-code-events.js';
+import type { ClawCodeConfig } from './borg-arc/adapters/claw-code-types.js';
 import {
   initializeCluster,
   createClusterInitSignal,
@@ -181,6 +185,21 @@ export function initOrchestrator(): void {
     produces: ['text', 'latent'],
   });
 
+  // Initialize claw-code adapter if binary is configured
+  if (process.env.CLAW_CODE_BIN) {
+    const clawConfig: ClawCodeConfig = {
+      binaryPath: process.env.CLAW_CODE_BIN,
+      model: process.env.CLAW_CODE_MODEL || 'sonnet',
+      ragUrl: process.env.CLAW_RAG_URL,
+    };
+    const clawAdapter = new ClawCodeAdapter(clawConfig);
+    const clawEventBridge = new ClawCodeEventBridge();
+    const clawRagClient = clawConfig.ragUrl
+      ? new ClawCodeRAGClient(clawConfig.ragUrl)
+      : null;
+    logger.info({ binary: clawConfig.binaryPath, model: clawConfig.model, ragEnabled: !!clawRagClient }, 'Claw-code adapter initialized');
+  }
+
   logger.info(
     { agents: [...agentRegistry.map((a) => a.id), 'neo'] },
     'Orchestrator initialized (Hermes transport active, Neo registered)',
@@ -190,6 +209,25 @@ export function initOrchestrator(): void {
 /** Return all agents that were successfully loaded. */
 export function getAvailableAgents(): AgentInfo[] {
   return [...agentRegistry];
+}
+
+/**
+ * Enrich a prompt with RAG context from the claw-code semantic search service.
+ * Returns the original prompt if RAG is unavailable or the query fails.
+ */
+export async function enrichWithClawRAG(prompt: string, ragUrl?: string): Promise<string> {
+  if (!ragUrl) return prompt;
+  try {
+    const client = new ClawCodeRAGClient(ragUrl);
+    const healthy = await client.health();
+    if (!healthy) return prompt;
+    const results = await client.query(prompt, 3);
+    if (!results.length) return prompt;
+    const context = results.map((r) => `[${r.source}]: ${r.text.slice(0, 300)}`).join('\n');
+    return `[Claw-Code Context]\n${context}\n\n${prompt}`;
+  } catch {
+    return prompt;
+  }
 }
 
 // ── Delegation ───────────────────────────────────────────────────────
