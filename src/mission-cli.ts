@@ -22,6 +22,8 @@ import {
   cancelMissionTask,
 } from './db.js';
 import { getClient, type AgentName } from './collectiveboard/index.js';
+import { routeTask, type CollectiveAgent } from './model-routing/index.js';
+import { contextCollector, createSessionInjector } from './context-injector/index.js';
 
 initDatabase();
 
@@ -78,12 +80,55 @@ switch (command) {
     }
     const title = titleArg || prompt.slice(0, 60);
     const id = randomBytes(4).toString('hex');
-    createMissionTask(id, title, prompt, targetAgent ?? null, createdBy, priorityArg);
+    // Model routing: determine recommended tier for this task
+    const routing = routeTask({
+      taskPrompt: prompt,
+      agent: (targetAgent as CollectiveAgent) ?? undefined,
+      priority: priorityArg,
+    });
+
+    // Context injection: enrich prompt with session state before task creation
+    const sessionId = process.env.CLAUDECLAW_SESSION_ID ?? id;
+    const injector = createSessionInjector(contextCollector, sessionId);
+
+    // Auto-register routing decision as context for the executing agent
+    injector.register({
+      id: 'routing-decision',
+      source: 'routing-decision',
+      content: `[Routing] Model: ${routing.model} | Tier: ${routing.tier} | ${routing.reasons[0]}`,
+      priority: 'low',
+    });
+
+    // Pull in operator context from env if available
+    if (process.env.CLAUDECLAW_OPERATOR_CONTEXT) {
+      injector.register({
+        id: 'operator-env',
+        source: 'operator-context',
+        content: process.env.CLAUDECLAW_OPERATOR_CONTEXT,
+        priority: 'high',
+      });
+    }
+
+    // Inject pending context into prompt (wrap strategy for clean separation)
+    let enrichedPrompt = prompt;
+    let contextEntryCount = 0;
+    if (injector.hasPending()) {
+      const injection = injector.inject(prompt, 'wrap');
+      enrichedPrompt = injection.text;
+      contextEntryCount = injection.result.entryCount;
+    }
+
+    createMissionTask(id, title, enrichedPrompt, targetAgent ?? null, createdBy, priorityArg);
 
     console.log(`Mission task created: ${id}`);
     console.log(`  Title:    ${title}`);
     console.log(`  Agent:    ${targetAgent || 'unassigned (use dashboard to assign)'}`);
     console.log(`  Priority: ${priorityArg}`);
+    console.log(`  Model:    ${routing.model} (${routing.tier}, confidence=${routing.confidence})`);
+    console.log(`  Routing:  ${routing.reasons[0]}`);
+    if (contextEntryCount > 0) {
+      console.log(`  Context:  ${contextEntryCount} entries injected`);
+    }
     console.log(`  Prompt:   ${prompt.slice(0, 100)}${prompt.length > 100 ? '...' : ''}`);
 
     // Best-effort: push to CollectiveBoard

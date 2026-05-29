@@ -16,6 +16,7 @@ import { logger } from './logger.js';
 import { messageQueue } from './message-queue.js';
 import { runAgent } from './agent.js';
 import { formatForTelegram, splitMessage } from './bot.js';
+import { enrichPrompt } from './context-injector/index.js';
 
 type Sender = (text: string) => Promise<void>;
 
@@ -101,8 +102,18 @@ async function runDueTasks(): Promise<void> {
       try {
         await sender(`Scheduled task running: "${task.prompt.slice(0, 80)}${task.prompt.length > 80 ? '...' : ''}"`);
 
+        // Enrich prompt with context (hive activity, operator directives, agent identity)
+        const enrichment = await enrichPrompt(task.prompt, schedulerAgentId);
+        if (enrichment.injection.injected) {
+          logger.info({
+            taskId: task.id,
+            contextSources: enrichment.sources,
+            entryCount: enrichment.injection.entryCount,
+          }, 'Scheduled task prompt enriched with context');
+        }
+
         // Run as a fresh agent call (no session — scheduled tasks are autonomous)
-        const result = await runAgent(task.prompt, undefined, () => {}, undefined, undefined, abortController, undefined, agentMcpAllowlist);
+        const result = await runAgent(enrichment.prompt, undefined, () => {}, undefined, undefined, abortController, undefined, agentMcpAllowlist);
         clearTimeout(timeout);
 
         if (result.aborted) {
@@ -164,7 +175,17 @@ async function runDueMissionTasks(): Promise<void> {
     const timeout = setTimeout(() => abortController.abort(), TASK_TIMEOUT_MS);
 
     try {
-      const result = await runAgent(mission.prompt, undefined, () => {}, undefined, undefined, abortController, undefined, agentMcpAllowlist);
+      // Enrich prompt with context (hive activity, operator directives, agent identity)
+      const enrichment = await enrichPrompt(mission.prompt, mission.assigned_agent ?? null);
+      if (enrichment.injection.injected) {
+        logger.info({
+          missionId: mission.id,
+          contextSources: enrichment.sources,
+          entryCount: enrichment.injection.entryCount,
+        }, 'Mission prompt enriched with context');
+      }
+
+      const result = await runAgent(enrichment.prompt, undefined, () => {}, undefined, undefined, abortController, undefined, agentMcpAllowlist);
       clearTimeout(timeout);
 
       if (result.aborted) {
