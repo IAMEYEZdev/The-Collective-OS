@@ -39,6 +39,7 @@ import { buildMemoryContext, evaluateMemoryRelevance, saveConversationTurn, shou
 import { flushIngestionBuffer } from './memory-ingest.js';
 import { runConsolidation } from './memory-consolidate.js';
 import { classifyMessageComplexity } from './message-classifier.js';
+import { enrichPrompt } from './context-injector/index.js';
 import { scanForSecrets, redactSecrets } from './exfiltration-guard.js';
 import { trackUsage, getRateStatus } from './rate-tracker.js';
 import { buildCostFooter } from './cost-footer.js';
@@ -570,7 +571,31 @@ async function handleMessage(ctx: Context, message: string, forceVoiceReply = fa
   }
 
   parts.push(message);
-  const fullMessage = parts.join('\n\n');
+  let fullMessage = parts.join('\n\n');
+
+  // Context enrichment: inject operator directives, agent identity, hive-mind activity,
+  // and mission state. Memory/consolidation/cross-agent already handled by buildMemoryContext.
+  try {
+    const enrichment = await enrichPrompt(fullMessage, AGENT_ID, {
+      strategy: 'prepend',
+      skipHive: false,
+      skipOperator: false,
+      skipAgentDirectives: false,
+      // buildMemoryContext already injects these — skip to avoid duplication
+      skipMemory: true,
+      skipTeamActivity: true,
+      skipConsolidations: true,
+    });
+    if (enrichment.injection.injected) {
+      fullMessage = enrichment.prompt;
+      logger.debug(
+        { sources: enrichment.sources, entries: enrichment.injection.entryCount },
+        'Bot prompt enriched with context injection',
+      );
+    }
+  } catch (err) {
+    logger.error({ err }, 'Context enrichment failed — continuing without enrichment');
+  }
 
   // Smart model routing: use cheap model for simple acknowledgments
   const userModel = chatModelOverride.get(chatIdStr) ?? agentDefaultModel;
@@ -1806,7 +1831,26 @@ async function processDashboardMessage(
     }
 
     dashParts.push(text);
-    const fullMessage = dashParts.join('\n\n');
+    let fullMessage = dashParts.join('\n\n');
+
+    // Context enrichment for dashboard path (same as Telegram path)
+    try {
+      const enrichment = await enrichPrompt(fullMessage, AGENT_ID, {
+        strategy: 'prepend',
+        skipMemory: true,
+        skipTeamActivity: true,
+        skipConsolidations: true,
+      });
+      if (enrichment.injection.injected) {
+        fullMessage = enrichment.prompt;
+        logger.debug(
+          { sources: enrichment.sources, entries: enrichment.injection.entryCount },
+          'Dashboard prompt enriched with context injection',
+        );
+      }
+    } catch (err) {
+      logger.error({ err }, 'Dashboard context enrichment failed — continuing without');
+    }
 
     const onProgress = (event: AgentProgressEvent) => {
       emitChatEvent({ type: 'progress', chatId: chatIdStr, description: event.description });

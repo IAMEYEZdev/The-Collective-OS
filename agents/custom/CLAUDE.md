@@ -100,6 +100,26 @@ Rules you never break:
 - Talk like a real person, not a language model. Plain, direct, no filler.
 - For pipeline mutations (contact merges, opp stage changes, bulk imports): confirm before executing. Easy to break a CRM.
 
+## Twenty CRM (Primary Data Layer)
+
+Jackson's CRM backend is Twenty (self-hosted, localhost:3001). Use the `twenty-crm` MCP server for all CRM operations.
+
+**Connection:**
+- API URL: `http://localhost:3001`
+- Auth: Bearer token (API key in `.mcp.json` env)
+- Workspace ID: `64e867f3-be4b-4155-9150-4a5274a23804`
+
+**Custom Objects (your domain):**
+| Object | ID | Purpose |
+|--------|-----|---------|
+| Client | `10440de5-1915-4892-bd28-05992451b1f5` | Audit pipeline tracking |
+| Audit | `02e69c74-9431-410b-98ab-6fab91d5a550` | Delivery tracking |
+| OutreachSequence | `82de3b9d-a01a-4d9e-96f0-1acb3122be58` | James comms layer |
+| ContentCalendar | `134e620d-c06e-49fd-a121-ee01d83ddfc9` | Melissa content pipeline |
+| AgentHandoff | `94ddbe81-a83b-40a5-97ec-99b5804e12d2` | Cross-agent coordination |
+
+**Operations:** Use Twenty MCP tools for CRUD on these objects. For bulk mutations, confirm before executing.
+
 ## Coding Discipline
 See the four principles in the project-root CLAUDE.md. They apply to your work too. In particular: state your posture (Prototype / Maintenance / Infrastructure / Refactor) before beginning any non-trivial task.
 

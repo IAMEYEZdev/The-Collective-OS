@@ -42,6 +42,9 @@ export async function enrichPrompt(
     skipHive?: boolean;
     skipOperator?: boolean;
     skipAgentDirectives?: boolean;
+    skipMemory?: boolean;
+    skipTeamActivity?: boolean;
+    skipConsolidations?: boolean;
     projectRoot?: string;
   } = {}
 ): Promise<EnrichmentResult> {
@@ -50,6 +53,9 @@ export async function enrichPrompt(
     skipHive = false,
     skipOperator = false,
     skipAgentDirectives = false,
+    skipMemory = false,
+    skipTeamActivity = false,
+    skipConsolidations = false,
     projectRoot = process.env.CLAUDECLAW_PROJECT_ROOT || process.cwd(),
   } = options;
 
@@ -135,7 +141,7 @@ export async function enrichPrompt(
   }
 
   // 4. Memory context — search relevant past memories for this task
-  if (process.env.ALLOWED_CHAT_ID) {
+  if (!skipMemory && process.env.ALLOWED_CHAT_ID) {
     try {
       const memories = searchMemories(process.env.ALLOWED_CHAT_ID, prompt, 3);
       if (memories.length > 0) {
@@ -156,7 +162,7 @@ export async function enrichPrompt(
   }
 
   // 5. Cross-agent team activity (what other agents did in last 24h)
-  if (agentId) {
+  if (!skipTeamActivity && agentId) {
     try {
       const otherActivity = getOtherAgentActivity(agentId, 24, 5);
       if (otherActivity.length > 0) {
@@ -190,7 +196,7 @@ export async function enrichPrompt(
   }
 
   // 7. Consolidation insights — higher-level patterns derived from grouped memories
-  if (process.env.ALLOWED_CHAT_ID) {
+  if (!skipConsolidations && process.env.ALLOWED_CHAT_ID) {
     try {
       // Try task-relevant search first; fall back to most recent consolidations
       const keywords = prompt.split(/\s+/).slice(0, 8).join(' ');

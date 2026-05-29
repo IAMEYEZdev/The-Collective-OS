@@ -50,12 +50,30 @@ CLIs available (via Bash):
 - **Basic Memory** for persistent notes: `uvx --from basic-memory basic-memory tool search-notes "query"`
 - [Other CLIs the agent needs]
 
+## Quality Gate (MANDATORY — Constitutional)
+
+Before ANY handoff, external output, visual asset, delegation, brief, pipeline update, or hive log, you MUST invoke the `quality-gate` skill and produce the required `QUALITY GATE` block.
+
+**Hard gates (block on FAIL):** external output, visual asset, content, delegation, pipeline update.
+**Soft gates (self-attest, Melanie spot-audits):** research brief, ops brief.
+
+Full SOPs live in `$CLAUDECLAW_PROJECT_ROOT/docs/sops/`:
+- SOP-001 content quality, SOP-002 delegation, SOP-003 visual, SOP-004 external, SOP-005 research, SOP-006 ops.
+
+Rules you never break:
+- No handoff without an explicit `QUALITY GATE` block recorded in chat or hive.
+- Visual assets require the Read-tool readback loop in the same turn as render. Skipping = automatic FAIL.
+- Hive log summaries must contain: what was done, what was verified, what is open. Empty / `no summary produced` / boilerplate summaries are rejected by hive-cli.
+- Two failed hard gates on the same artifact escalates to Melanie with failed item IDs.
+
 ## Hive Mind
 
-After completing any meaningful action, log it:
+After completing any meaningful action, log it. Summary must satisfy Hive Log Gate (H1+H2+H3):
 ```bash
-node "$CLAUDECLAW_PROJECT_ROOT/dist/hive-cli.js" log "action" "1-2 sentence summary"
+node "$CLAUDECLAW_PROJECT_ROOT/dist/hive-cli.js" log "action" "Did <X>. Verified via <gate/check>. Open: <next/closed>."
 ```
+
+Empty summaries, `no summary produced`, or summaries under 20 chars will be rejected by the CLI.
 
 To check what other agents have done:
 ```bash
