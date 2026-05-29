@@ -851,3 +851,123 @@ describe('Borg Queen Payload', () => {
     expect(state[0]).toBe(original[0]);
   });
 });
+
+// ── Neo Cross-Hemisphere Integration ──────────────────────────────────
+
+describe('Neo namespace integration', () => {
+  it('aggregateGlobalState routes neo/ agents to structural+reasoning blend', () => {
+    const neoState = makeAgentState('neo-worker-1', 'neo/codex-alpha', 0, 3);
+    const l1State = makeAgentState('agent-0', 'L1', 0, 1);
+
+    const participants: ClusterParticipant[] = [
+      { agentId: 'agent-0', layer: 'L1', weight: 0.5, latentCapable: true },
+      { agentId: 'neo-worker-1', layer: 'neo/codex-alpha' as any, weight: 0.5, latentCapable: true },
+    ];
+
+    const global = aggregateGlobalState([l1State, neoState], participants);
+    expect(global.length).toBe(LATENT_DIM);
+
+    // Structural segment (0-128) should have energy from both L1 and neo
+    let structuralEnergy = 0;
+    for (let i = 0; i < 128; i++) structuralEnergy += global[i] * global[i];
+    expect(structuralEnergy).toBeGreaterThan(0);
+
+    // Reasoning segment (448-576) should have energy from neo blend (40%)
+    let reasoningEnergy = 0;
+    for (let i = 448; i < 576; i++) reasoningEnergy += global[i] * global[i];
+    expect(reasoningEnergy).toBeGreaterThan(0);
+  });
+
+  it('initializeCluster assigns reduced weight to neo/ participants', () => {
+    const config = initializeCluster({
+      taskId: 'neo-test',
+      participants: [
+        { agentId: 'qm-agent', layer: 'L1', latentCapable: true },
+        { agentId: 'neo-worker', layer: 'neo/codex-beta', latentCapable: true },
+      ],
+      complexity: 'moderate',
+    });
+
+    const qm = config.participants.find(p => p.agentId === 'qm-agent')!;
+    const neo = config.participants.find(p => p.agentId === 'neo-worker')!;
+
+    // Neo gets 0.8 base vs 1.0, so after normalization neo < qm
+    expect(neo.weight).toBeLessThan(qm.weight);
+  });
+
+  it('detectCapabilityGaps works with neo/ participants in cluster results', () => {
+    const finalState = makeRandomVec(7);
+    const clusters = [
+      {
+        taskId: 'neo-eng-1',
+        domain: 'neo-engineering',
+        result: {
+          clusterId: 'c-neo-1',
+          taskId: 'neo-eng-1',
+          rounds: [],
+          converged: false,
+          finalGlobalState: finalState,
+          totalRounds: 8,
+          creditAssignments: new Map(),
+        } as ClusterResult,
+      },
+      {
+        taskId: 'neo-eng-2',
+        domain: 'neo-engineering',
+        result: {
+          clusterId: 'c-neo-2',
+          taskId: 'neo-eng-2',
+          rounds: [],
+          converged: false,
+          finalGlobalState: finalState,
+          totalRounds: 7,
+          creditAssignments: new Map(),
+        } as ClusterResult,
+      },
+    ];
+
+    const gaps = detectCapabilityGaps(clusters);
+    expect(gaps.length).toBeGreaterThan(0);
+    expect(gaps[0].domain).toBe('neo-engineering');
+  });
+
+  it('gapsToBorgArcContext includes neo composite priority', () => {
+    const gaps = [{
+      domain: 'neo-engineering',
+      severity: 0.7,
+      avgConvergenceRounds: 7,
+      reviewRate: 0.5,
+      gapVector: makeRandomVec(42),
+    }];
+    const result = gapsToBorgArcContext(gaps);
+    expect(result.layerPriorities).toHaveProperty('neo');
+    expect(result.layerPriorities['neo']).toBeGreaterThanOrEqual(0);
+  });
+
+  it('runCluster with neo/ participant produces valid credit assignments', () => {
+    const config = initializeCluster({
+      taskId: 'neo-cluster-test',
+      participants: [
+        { agentId: 'qm-melanie', layer: 'L6', latentCapable: true },
+        { agentId: 'neo-codex', layer: 'neo/codex-worker', latentCapable: true },
+      ],
+      complexity: 'linear',
+    });
+
+    const agentStatesPerRound: AgentRoundState[][] = [
+      [
+        makeAgentState('qm-melanie', 'L6', 0, 1),
+        makeAgentState('neo-codex', 'neo/codex-worker', 0, 2),
+      ],
+      [
+        makeAgentState('qm-melanie', 'L6', 1, 1.01),
+        makeAgentState('neo-codex', 'neo/codex-worker', 1, 2.01),
+      ],
+    ];
+
+    const result = runCluster(config, agentStatesPerRound);
+    expect(result.creditAssignments.has('neo-codex')).toBe(true);
+    expect(result.creditAssignments.has('qm-melanie')).toBe(true);
+    expect(result.totalRounds).toBeGreaterThan(0);
+  });
+});

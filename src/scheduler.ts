@@ -1,4 +1,7 @@
 import { CronExpressionParser } from 'cron-parser';
+import { execFile } from 'child_process';
+import { existsSync } from 'fs';
+import path from 'path';
 
 import { AGENT_ID, ALLOWED_CHAT_ID, agentMcpAllowlist } from './config.js';
 import {
@@ -66,6 +69,10 @@ export function initScheduler(send: Sender, agentId = 'main'): void {
   }
 
   setInterval(() => void runDueTasks(), 60_000);
+
+  // Neo poll: ingest Neo→QM result envelopes on same 60s cadence
+  initNeoPoll();
+
   logger.info({ agentId }, 'Scheduler started (checking every 60s)');
 }
 
@@ -229,4 +236,44 @@ async function runDueMissionTasks(): Promise<void> {
 export function computeNextRun(cronExpression: string): number {
   const interval = CronExpressionParser.parse(cronExpression);
   return Math.floor(interval.next().getTime() / 1000);
+}
+
+// ── Neo Poll Integration ──────────────────────────────────────────────
+// Runs neo-poll.mjs on the same 60s scheduler tick.
+// Non-blocking: spawns as child process, logs results, never blocks scheduler.
+
+let neoPollRunning = false;
+
+function initNeoPoll(): void {
+  const neoPollScript = path.resolve(__dirname, '..', 'scripts', 'neo-poll.mjs');
+  if (!existsSync(neoPollScript)) {
+    logger.info('Neo poll script not found, skipping neo-poll integration');
+    return;
+  }
+
+  logger.info('Neo poll integration active (60s cadence, piggybacking scheduler tick)');
+  setInterval(() => void runNeoPoll(neoPollScript), 60_000);
+  // Run once immediately on startup
+  void runNeoPoll(neoPollScript);
+}
+
+async function runNeoPoll(scriptPath: string): Promise<void> {
+  if (neoPollRunning) return; // prevent overlap
+  neoPollRunning = true;
+
+  return new Promise<void>((resolve) => {
+    execFile('node', [scriptPath], { timeout: 30_000 }, (err, stdout, stderr) => {
+      neoPollRunning = false;
+      if (err) {
+        // Timeout or crash — log but don't block scheduler
+        logger.warn({ err: err.message }, 'Neo poll cycle failed');
+      } else {
+        const output = stdout.trim();
+        if (output && !output.includes('No new results')) {
+          logger.info({ output: output.slice(0, 200) }, 'Neo poll processed results');
+        }
+      }
+      resolve();
+    });
+  });
 }

@@ -171,9 +171,19 @@ export function initOrchestrator(): void {
     });
   }
 
+  // Register Neo (cross-hemisphere engineering substrate via Codex CLI).
+  // Neo communicates via file-bus dispatch envelopes, not direct Hermes transport,
+  // but registration enables route checks, dimension validation, and credit
+  // assignment when Neo agents participate in RecursiveMAS clusters.
+  registerAgent({
+    agentId: 'neo',
+    accepts: ['text', 'latent'],
+    produces: ['text', 'latent'],
+  });
+
   logger.info(
-    { agents: agentRegistry.map((a) => a.id) },
-    'Orchestrator initialized (Hermes transport active)',
+    { agents: [...agentRegistry.map((a) => a.id), 'neo'] },
+    'Orchestrator initialized (Hermes transport active, Neo registered)',
   );
 }
 
