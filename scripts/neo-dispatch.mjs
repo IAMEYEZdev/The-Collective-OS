@@ -19,7 +19,7 @@
 
 import fs from 'fs';
 import path from 'path';
-import { execSync, spawn } from 'child_process';
+import { execSync } from 'child_process';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -103,51 +103,51 @@ const filesBlock = envelope.context?.filesOfInterest?.length
   ? `\nFiles of interest:\n${envelope.context.filesOfInterest.map(f => `- ${f}`).join('\n')}`
   : '';
 
-const leaderPrompt = `${latentHeader}# Neo Engineering Task: ${envelope.task?.title}
+const resultRelPath = envelope.callback?.resultPath || `workspace/dispatch/inbound/${ulid}.result.json`;
+const resultAbsPath = path.resolve(envelope.context?.repoRoot || PROJECT_ROOT, resultRelPath);
+
+const leaderPrompt = `${latentHeader}YOUR PRIMARY OBJECTIVE: Write a JSON file to this EXACT absolute path:
+${resultAbsPath}
+
+The JSON file MUST contain these fields:
+{
+  "version": 1,
+  "ulid": "${envelope.ulid}",
+  "status": "success" or "partial" or "failed" or "escalate",
+  "summary": "1-3 sentence description of what you did",
+  "artifacts": [],
+  "metrics": { "rounds": 1, "wallTimeMs": 0 },
+  "openQuestions": [],
+  "reverseBrief": "what you would do differently next time",
+  "timestamp": "<current ISO timestamp>"
+}
+
+Write this file FIRST, then do the task below. Update the file again after completing the task.
+
+---
+
+# Task: ${envelope.task?.title}
 
 ULID: ${envelope.ulid}
-Parent Goal: ${envelope.parentGoalId || 'none'}
-Type: ${envelope.task?.type}
-Complexity: ${envelope.task?.complexity}
-Priority: ${envelope.task?.priority}
-Deadline: ${envelope.deadline || 'none'}
+Type: ${envelope.task?.type} | Complexity: ${envelope.task?.complexity} | Priority: ${envelope.task?.priority}
 
-## Description
 ${envelope.task?.description}
 ${constraintsBlock}
 ${filesBlock}
 ${tacticalHint}
 
-## Repository Context
-Root: ${envelope.context?.repoRoot || PROJECT_ROOT}
-Branch: ${envelope.context?.branch || 'main'}
-
-## Output Requirements
-Write result envelope to: ${envelope.callback?.resultPath || `workspace/dispatch/inbound/${ulid}.result.json`}
-Write artifacts to: workspace/dispatch/artifacts/${ulid}/
-
-Result envelope must include:
-- status: success|partial|failed|escalate
-- summary: 1-3 sentence outcome
-- artifacts[]: array of {type, path}
-- tacticalContributions[]: array of {agent, credit, summary}
-- metrics: {rounds, converged, tokensIn, tokensOut, wallTimeMs}
-- openQuestions[]: any unresolved issues
-- reverseBrief: what you would do differently next time
+Working directory: ${envelope.context?.repoRoot || PROJECT_ROOT}
 `;
 
 // ── Spawn oh-my-codex leader ──────────────────────────────────────────
-// oh-my-codex team mode: leader session with task as initial prompt
+// Codex CLI: unattended execution with full sandbox access for file writes
+// Prompt written to temp file, piped via shell redirect to avoid
+// detached + stdin pipe race condition on Windows.
 const codexBin = process.env.CODEX_BIN || 'codex';
-const codexArgs = [
-  '--model', process.env.CODEX_MODEL || 'o4-mini',
-  '--approval-mode', 'auto-edit',
-  '--quiet',
-  leaderPrompt,
-];
 
 console.log(`[neo-dispatch] Spawning oh-my-codex leader...`);
-console.log(`[neo-dispatch] Command: ${codexBin} ${codexArgs.slice(0, 3).join(' ')} [prompt...]`);
+console.log(`[neo-dispatch] Command: ${codexBin} exec --model ${process.env.CODEX_MODEL || 'gpt-5.5'} -s danger-full-access -C <cwd> - < tmpfile`);
+console.log(`[neo-dispatch] Prompt length: ${leaderPrompt.length} chars`);
 
 // Log dispatch to hive
 try {
@@ -157,17 +157,38 @@ try {
   );
 } catch { /* best-effort */ }
 
-// Spawn detached so QM doesn't block
-const child = spawn(codexBin, codexArgs, {
-  cwd: envelope.context?.repoRoot || PROJECT_ROOT,
-  stdio: 'inherit',
-  detached: true,
-  env: {
-    ...process.env,
-    NEO_DISPATCH_ULID: ulid,
-    NEO_DISPATCH_FILE: dispatchPath,
-  },
-});
+// Run codex synchronously. Detached spawn on Windows kills the child
+// process silently. The caller (scheduler/orchestrator) is responsible
+// for running neo-dispatch.mjs in the background if async is needed.
+const isWindows = process.platform === 'win32';
+const tmpDir = path.join(PROJECT_ROOT, 'workspace', 'dispatch', 'tmp');
+if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
+const promptFile = path.join(tmpDir, `${ulid}.prompt.txt`);
+fs.writeFileSync(promptFile, leaderPrompt, 'utf-8');
 
-child.unref();
-console.log(`[neo-dispatch] Leader spawned (PID: ${child.pid}). QM can continue.`);
+const model = process.env.CODEX_MODEL || 'gpt-5.5';
+const cwd = envelope.context?.repoRoot || PROJECT_ROOT;
+const shellCmd = isWindows
+  ? `${codexBin} exec --model ${model} -s danger-full-access -C "${cwd}" --skip-git-repo-check - < "${promptFile}"`
+  : `${codexBin} exec --model ${model} -s danger-full-access -C '${cwd}' --skip-git-repo-check - < '${promptFile}'`;
+
+console.log(`[neo-dispatch] Running codex synchronously...`);
+try {
+  execSync(shellCmd, {
+    cwd,
+    stdio: 'inherit',
+    shell: true,
+    timeout: 300_000, // 5 min max for any single task
+    env: {
+      ...process.env,
+      NEO_DISPATCH_ULID: ulid,
+      NEO_DISPATCH_FILE: dispatchPath,
+    },
+  });
+  console.log(`[neo-dispatch] Codex completed successfully.`);
+} catch (err) {
+  console.error(`[neo-dispatch] Codex execution failed: ${err.message}`);
+  process.exitCode = 1;
+} finally {
+  try { fs.unlinkSync(promptFile); } catch { /* already gone */ }
+}

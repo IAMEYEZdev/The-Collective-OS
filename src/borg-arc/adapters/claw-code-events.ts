@@ -1,5 +1,5 @@
 // src/borg-arc/adapters/claw-code-events.ts
-import type { ClawCodeTelemetryEvent } from './claw-code-types';
+import type { ClawCodeTelemetryEvent } from './claw-code-types.js';
 
 export interface HiveEntry {
   action: string;

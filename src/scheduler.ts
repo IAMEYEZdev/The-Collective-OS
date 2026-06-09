@@ -1,3 +1,6 @@
+import { fileURLToPath } from 'node:url';
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
 import { CronExpressionParser } from 'cron-parser';
 import { execFile } from 'child_process';
 import { existsSync } from 'fs';
@@ -18,7 +21,7 @@ import {
 import { logger } from './logger.js';
 import { messageQueue } from './message-queue.js';
 import { runAgent } from './agent.js';
-import { formatForTelegram, splitMessage } from './bot.js';
+import { escapeHtml, formatForTelegram, splitMessage } from './bot.js';
 import { enrichPrompt } from './context-injector/index.js';
 import { ClawCodeRAGClient } from './borg-arc/adapters/claw-code-rag.js';
 
@@ -148,7 +151,7 @@ async function runDueTasks(): Promise<void> {
 
         if (result.aborted) {
           updateTaskAfterRun(task.id, nextRun, 'Timed out after 10 minutes', 'timeout');
-          await sender(`⏱ Task timed out after 10m: "${task.prompt.slice(0, 60)}..." — killed.`);
+          await sender(`⏱ Task timed out after 10m: "${escapeHtml(task.prompt.slice(0, 60))}..." — killed.`);
           logger.warn({ taskId: task.id }, 'Task timed out');
           return;
         }
@@ -175,7 +178,7 @@ async function runDueTasks(): Promise<void> {
 
         logger.error({ err, taskId: task.id }, 'Scheduled task failed');
         try {
-          await sender(`❌ Task failed: "${task.prompt.slice(0, 60)}..." — ${errMsg.slice(0, 200)}`);
+          await sender(`❌ Task failed: "${escapeHtml(task.prompt.slice(0, 60))}..." — ${escapeHtml(errMsg.slice(0, 200))}`);
         } catch {
           // ignore send failure
         }
@@ -239,7 +242,7 @@ async function runDueMissionTasks(): Promise<void> {
         completeMissionTask(mission.id, null, 'failed', 'Timed out after 10 minutes');
         logger.warn({ missionId: mission.id }, 'Mission task timed out');
         try {
-          await sender('Mission task timed out: "' + mission.title + '"');
+          await sender('Mission task timed out: "' + escapeHtml(mission.title) + '"');
         } catch (sendErr) {
           // Sender can fail for Telegram API blips or chat-not-found. We
           // still want to see it so the user isn't silently unnotified.

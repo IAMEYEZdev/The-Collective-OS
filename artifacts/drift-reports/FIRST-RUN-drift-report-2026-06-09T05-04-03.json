@@ -1,0 +1,438 @@
+{
+  "timestamp": "2026-06-09T05:04:03.728Z",
+  "surfaces_checked": 30,
+  "surfaces_skipped": 9,
+  "skipped_reasons": [
+    {
+      "id": "hive-sqlite",
+      "reason": ".db file, binary/WAL-managed"
+    },
+    {
+      "id": "basic-memory-sqlite",
+      "reason": ".db file, binary/WAL-managed"
+    },
+    {
+      "id": "obsidian-vault",
+      "reason": "Directory entry, not a single file"
+    },
+    {
+      "id": "hermes-skills",
+      "reason": "Directory entry, not a single file"
+    },
+    {
+      "id": "agent-output-dirs",
+      "reason": "Pattern-only entry, no concrete absolute path"
+    },
+    {
+      "id": "hermes-traces",
+      "reason": "Directory entry, not a single file"
+    },
+    {
+      "id": "project-skills",
+      "reason": "Pattern-only entry, no concrete absolute path"
+    },
+    {
+      "id": "global-skills",
+      "reason": "Pattern-only entry, no concrete absolute path"
+    },
+    {
+      "id": "gate-module",
+      "reason": "Pattern-only entry, no concrete absolute path"
+    }
+  ],
+  "path_resolution_failures": [],
+  "drift_findings": [
+    {
+      "entry": {
+        "id": "goal-sqlite",
+        "path": "~/.claude/goal/goals.sqlite",
+        "absolute": "C:\\Users\\windows\\.claude\\goal\\goals.sqlite",
+        "policy": "GATE",
+        "section": "memory_stores"
+      },
+      "committedHash": "NOT_IN_GIT",
+      "workingHash": "945ca89542e5ca8bf7d6f74efbcf83e76805baf1a03213b46c92b68e877877f0",
+      "explanation": "unlogged",
+      "detail": "File differs from committed state with no hive_mind entry or allowlist"
+    },
+    {
+      "entry": {
+        "id": "root-claude-md",
+        "path": "CLAUDE.md",
+        "absolute": "C:\\Users\\windows\\claudeclaw-os\\CLAUDE.md",
+        "policy": "GATE",
+        "section": "governance_surfaces"
+      },
+      "committedHash": "d67b4fa5eea8c688fd9395ec7f325ac31740db1dce9b77a69fe56b338299013a",
+      "workingHash": "c78de9b5312540fb44b2aba57304d080c647be645a4256a0744f23509a14157c",
+      "explanation": "unlogged",
+      "detail": "File differs from committed state with no hive_mind entry or allowlist"
+    },
+    {
+      "entry": {
+        "id": "global-claude-md",
+        "path": "~/.claude/CLAUDE.md",
+        "absolute": "C:\\Users\\windows\\.claude\\CLAUDE.md",
+        "policy": "GATE",
+        "section": "governance_surfaces"
+      },
+      "committedHash": "NOT_IN_GIT",
+      "workingHash": "c2de77499b2f4a7175b7a4f2030918f3af806111337d4217e2bb4e3bac0bfba5",
+      "explanation": "unlogged",
+      "detail": "File differs from committed state with no hive_mind entry or allowlist"
+    },
+    {
+      "entry": {
+        "id": "agent-claude-md-template",
+        "path": "agents/_template/CLAUDE.md",
+        "absolute": "C:\\Users\\windows\\claudeclaw-os\\agents\\_template\\CLAUDE.md",
+        "policy": "GATE",
+        "section": "governance_surfaces"
+      },
+      "committedHash": "8f0fc0a9447fc8d04e39bf7425559ee3c1ffaf9bff37a7fde7066563324e6f4e",
+      "workingHash": "78275f15466a5ce6eac5adfc0e16198a15d244ebb34b6e8e928c8528b196ce50",
+      "explanation": "unlogged",
+      "detail": "File differs from committed state with no hive_mind entry or allowlist"
+    },
+    {
+      "entry": {
+        "id": "agent-comms-claude-md",
+        "path": "agents/comms/CLAUDE.md",
+        "absolute": "C:\\Users\\windows\\claudeclaw-os\\agents\\comms\\CLAUDE.md",
+        "policy": "GATE",
+        "section": "governance_surfaces"
+      },
+      "committedHash": "bd0eab080b44a073fce4c3be74106a8894481ee819103a95467b142f76ad4327",
+      "workingHash": "648a4813d9b7ab339a71cf9c30447eb1370a87f89ecf448085b529413763d869",
+      "explanation": "unlogged",
+      "detail": "File differs from committed state with no hive_mind entry or allowlist"
+    },
+    {
+      "entry": {
+        "id": "agent-ops-claude-md",
+        "path": "agents/ops/CLAUDE.md",
+        "absolute": "C:\\Users\\windows\\claudeclaw-os\\agents\\ops\\CLAUDE.md",
+        "policy": "GATE",
+        "section": "governance_surfaces"
+      },
+      "committedHash": "afb51b37fbf308fa3a5d0097fb28bfb8d6d66672c52d9b69593aa2293a8e0452",
+      "workingHash": "9dcdf90095baaa2974277c7bc3095c8e5798fd17b966f2f5e0a63e6e109896d5",
+      "explanation": "unlogged",
+      "detail": "File differs from committed state with no hive_mind entry or allowlist"
+    },
+    {
+      "entry": {
+        "id": "agent-research-claude-md",
+        "path": "agents/research/CLAUDE.md",
+        "absolute": "C:\\Users\\windows\\claudeclaw-os\\agents\\research\\CLAUDE.md",
+        "policy": "GATE",
+        "section": "governance_surfaces"
+      },
+      "committedHash": "99221242534e97986471044dfefbd02d8970aad3dcb5834775d4270ff36691af",
+      "workingHash": "a03172b4cc99d719d57723856fdf3c1ea8967ac4b97c70aabe28f15a887984bb",
+      "explanation": "unlogged",
+      "detail": "File differs from committed state with no hive_mind entry or allowlist"
+    },
+    {
+      "entry": {
+        "id": "agent-custom-claude-md",
+        "path": "agents/custom/CLAUDE.md",
+        "absolute": "C:\\Users\\windows\\claudeclaw-os\\agents\\custom\\CLAUDE.md",
+        "policy": "GATE",
+        "section": "governance_surfaces"
+      },
+      "committedHash": "a82a78bfb21d657323ba31b2ea8c9459f32ef9935651e0bbb0f10a86985b946a",
+      "workingHash": "d062acf69d1d6d59fa6cf6c71fed7e4ec2ba548711d6809dd6d1189d1a1b5053",
+      "explanation": "unlogged",
+      "detail": "File differs from committed state with no hive_mind entry or allowlist"
+    },
+    {
+      "entry": {
+        "id": "agent-content-claude-md",
+        "path": "agents/content/CLAUDE.md",
+        "absolute": "C:\\Users\\windows\\claudeclaw-os\\agents\\content\\CLAUDE.md",
+        "policy": "GATE",
+        "section": "governance_surfaces"
+      },
+      "committedHash": "2a51a1dcfa47b02f539f04d9db94ba1c59ffad23e8b7f1ea281bbcb04666d232",
+      "workingHash": "32036c666a5f27b0fc1ab913fce356f601a804a0d23cac4ce1db2ea6c9697c8b",
+      "explanation": "unlogged",
+      "detail": "File differs from committed state with no hive_mind entry or allowlist"
+    },
+    {
+      "entry": {
+        "id": "codex-global-agents-md",
+        "path": "~/.codex/AGENTS.md",
+        "absolute": "C:\\Users\\windows\\.codex\\AGENTS.md",
+        "policy": "GATE",
+        "section": "governance_surfaces"
+      },
+      "committedHash": "NOT_IN_GIT",
+      "workingHash": "0970492b8379360f84b5abe7d40d54f3ae601c69a0e87cdc6ac73cfd15c2ccae",
+      "explanation": "unlogged",
+      "detail": "File differs from committed state with no hive_mind entry or allowlist"
+    },
+    {
+      "entry": {
+        "id": "project-agents-md",
+        "path": "AGENTS.md",
+        "absolute": "C:\\Users\\windows\\claudeclaw-os\\AGENTS.md",
+        "policy": "GATE",
+        "section": "governance_surfaces"
+      },
+      "committedHash": "NOT_IN_GIT",
+      "workingHash": "ccc733f93c1242df3a9ebb3b3ab40f158390ed49186b92c66e6e54eee9b79e7a",
+      "explanation": "unlogged",
+      "detail": "File differs from committed state with no hive_mind entry or allowlist"
+    },
+    {
+      "entry": {
+        "id": "hook-auto-checkpoint",
+        "path": "~/.claude/hooks/auto-checkpoint-60.mjs",
+        "absolute": "C:\\Users\\windows\\.claude\\hooks\\auto-checkpoint-60.mjs",
+        "policy": "GATE",
+        "section": "governance_surfaces"
+      },
+      "committedHash": "NOT_IN_GIT",
+      "workingHash": "687121a3c76dc494bac605ebb12e12cfd84dd85d6ed8714c8110ef57c823652c",
+      "explanation": "unlogged",
+      "detail": "File differs from committed state with no hive_mind entry or allowlist"
+    },
+    {
+      "entry": {
+        "id": "hook-context-mode-cache-heal",
+        "path": "~/.claude/hooks/context-mode-cache-heal.mjs",
+        "absolute": "C:\\Users\\windows\\.claude\\hooks\\context-mode-cache-heal.mjs",
+        "policy": "GATE",
+        "section": "governance_surfaces"
+      },
+      "committedHash": "NOT_IN_GIT",
+      "workingHash": "34de2744ba6ccd8bbdbd0d5965ff8bfc7bc880ab5ba5ccef0613b120b79dee9e",
+      "explanation": "unlogged",
+      "detail": "File differs from committed state with no hive_mind entry or allowlist"
+    },
+    {
+      "entry": {
+        "id": "hook-pre-compact-snapshot",
+        "path": "~/.claude/hooks/pre-compact-snapshot.mjs",
+        "absolute": "C:\\Users\\windows\\.claude\\hooks\\pre-compact-snapshot.mjs",
+        "policy": "GATE",
+        "section": "governance_surfaces"
+      },
+      "committedHash": "NOT_IN_GIT",
+      "workingHash": "9d39815cb8bd2219f7f75eb32eb8fa86ba9f71ac785795893b2a225d0889f39a",
+      "explanation": "unlogged",
+      "detail": "File differs from committed state with no hive_mind entry or allowlist"
+    },
+    {
+      "entry": {
+        "id": "hook-session-context-inject",
+        "path": "~/.claude/hooks/session-context-inject.mjs",
+        "absolute": "C:\\Users\\windows\\.claude\\hooks\\session-context-inject.mjs",
+        "policy": "GATE",
+        "section": "governance_surfaces"
+      },
+      "committedHash": "NOT_IN_GIT",
+      "workingHash": "122b3d8cedaa15e99e331d3dbdc697df44206649239f936ce0d826973787384d",
+      "explanation": "unlogged",
+      "detail": "File differs from committed state with no hive_mind entry or allowlist"
+    },
+    {
+      "entry": {
+        "id": "directives-ledger",
+        "path": "artifacts/directives/DIRECTIVES-LEDGER.jsonl",
+        "absolute": "C:\\Users\\windows\\claudeclaw-os\\artifacts\\directives\\DIRECTIVES-LEDGER.jsonl",
+        "policy": "GATE",
+        "section": "governance_surfaces"
+      },
+      "committedHash": "NOT_IN_GIT",
+      "workingHash": "97054ebb5472b7fec7099861183a0e5b7cb2867e8d45c352e11306d949c5eff6",
+      "explanation": "unlogged",
+      "detail": "File differs from committed state with no hive_mind entry or allowlist"
+    },
+    {
+      "entry": {
+        "id": "neo-dispatch",
+        "path": "scripts/neo-dispatch.mjs",
+        "absolute": "C:\\Users\\windows\\claudeclaw-os\\scripts\\neo-dispatch.mjs",
+        "policy": "GATE",
+        "section": "runtime_machinery"
+      },
+      "committedHash": "258f4d7a55682aa9621dd6ab16f36b008336802a1bca631b658309f5e9f383f2",
+      "workingHash": "1512353c9252bd336a96003b21929592072c5aa1a1fd6f9758c81439227a9878",
+      "explanation": "unlogged",
+      "detail": "File differs from committed state with no hive_mind entry or allowlist"
+    },
+    {
+      "entry": {
+        "id": "scheduler-source",
+        "path": "src/scheduler.ts",
+        "absolute": "C:\\Users\\windows\\claudeclaw-os\\src\\scheduler.ts",
+        "policy": "GATE",
+        "section": "runtime_machinery"
+      },
+      "committedHash": "0765d1acb35cb7e663c3810c6d81b2761ad9957742343bfd806de825b699d6bb",
+      "workingHash": "5acb349ca4b456d270148a493d0bcae309da1118749f4061b23f3714323939da",
+      "explanation": "unlogged",
+      "detail": "File differs from committed state with no hive_mind entry or allowlist"
+    },
+    {
+      "entry": {
+        "id": "brand-voice-gate",
+        "path": "src/brand-voice-gate.ts",
+        "absolute": "C:\\Users\\windows\\claudeclaw-os\\src\\brand-voice-gate.ts",
+        "policy": "GATE",
+        "section": "runtime_machinery"
+      },
+      "committedHash": "NOT_IN_GIT",
+      "workingHash": "35b9a65c74d9f60987b53618fb11452dcaa99d7fba90ed75415ffe699d418db4",
+      "explanation": "unlogged",
+      "detail": "File differs from committed state with no hive_mind entry or allowlist"
+    },
+    {
+      "entry": {
+        "id": "bot-source",
+        "path": "src/bot.ts",
+        "absolute": "C:\\Users\\windows\\claudeclaw-os\\src\\bot.ts",
+        "policy": "GATE",
+        "section": "runtime_machinery"
+      },
+      "committedHash": "e98e061d852757015bfaca9f01799e945e272a0f6cad423816bdc714a1cbaebc",
+      "workingHash": "4da430bd465e008828b3e726aced12bba2aafe6fe56e6c8ccada501892507a38",
+      "explanation": "unlogged",
+      "detail": "File differs from committed state with no hive_mind entry or allowlist"
+    },
+    {
+      "entry": {
+        "id": "orchestrator-source",
+        "path": "src/orchestrator.ts",
+        "absolute": "C:\\Users\\windows\\claudeclaw-os\\src\\orchestrator.ts",
+        "policy": "GATE",
+        "section": "runtime_machinery"
+      },
+      "committedHash": "58d76e47cdb92cddea9ef02a77d30e731dd03f4b2bc43be514658ffa0be1cd12",
+      "workingHash": "d1f210cbdde9f54eebb707adf0add87afe489d855097296e6eda05a100fe40a4",
+      "explanation": "unlogged",
+      "detail": "File differs from committed state with no hive_mind entry or allowlist"
+    },
+    {
+      "entry": {
+        "id": "index-source",
+        "path": "src/index.ts",
+        "absolute": "C:\\Users\\windows\\claudeclaw-os\\src\\index.ts",
+        "policy": "GATE",
+        "section": "runtime_machinery"
+      },
+      "committedHash": "12825eff563bcd833899cafa7a711ab5cf24d8a85ab4821f5b3a685a85f58f82",
+      "workingHash": "63d89577f5b5d337ea8eda77a1f577e60cc335f0dd4a1b90e03503ea3b7a5460",
+      "explanation": "unlogged",
+      "detail": "File differs from committed state with no hive_mind entry or allowlist"
+    },
+    {
+      "entry": {
+        "id": "schedule-cli-source",
+        "path": "src/schedule-cli.ts",
+        "absolute": "C:\\Users\\windows\\claudeclaw-os\\src\\schedule-cli.ts",
+        "policy": "GATE",
+        "section": "runtime_machinery"
+      },
+      "committedHash": "dadbbd131fd0c2c6c3246726df430eb5da837ad7719a2bfd019aff5e5e04bd6f",
+      "workingHash": "d6488f75d4d9dfd0ea52d7b34bbed1608e2a60483514cce81c3ecac760e8202d",
+      "explanation": "unlogged",
+      "detail": "File differs from committed state with no hive_mind entry or allowlist"
+    },
+    {
+      "entry": {
+        "id": "env-file",
+        "path": ".env",
+        "absolute": "C:\\Users\\windows\\claudeclaw-os\\.env",
+        "policy": "GATE",
+        "section": "shared_config_surfaces"
+      },
+      "committedHash": "NOT_IN_GIT",
+      "workingHash": "fda6f18a9bc6e69fa362c1180c4806306d50aa5a7a8cde9b217cbbfc20b17508",
+      "explanation": "unlogged",
+      "detail": "File differs from committed state with no hive_mind entry or allowlist"
+    },
+    {
+      "entry": {
+        "id": "mcp-config",
+        "path": ".mcp.json",
+        "absolute": "C:\\Users\\windows\\claudeclaw-os\\.mcp.json",
+        "policy": "GATE",
+        "section": "shared_config_surfaces"
+      },
+      "committedHash": "NOT_IN_GIT",
+      "workingHash": "347c6f2e96d478bf70025281f406b1fc7ad34174f5e5a1428aa29b45f463bff0",
+      "explanation": "unlogged",
+      "detail": "File differs from committed state with no hive_mind entry or allowlist"
+    },
+    {
+      "entry": {
+        "id": "claude-settings",
+        "path": ".claude/settings.json",
+        "absolute": "C:\\Users\\windows\\claudeclaw-os\\.claude\\settings.json",
+        "policy": "GATE",
+        "section": "shared_config_surfaces"
+      },
+      "committedHash": "NOT_IN_GIT",
+      "workingHash": "34a0a8ea35d337136153170b84a00b19b996ca960ee95705d4891b297c62bc15",
+      "explanation": "unlogged",
+      "detail": "File differs from committed state with no hive_mind entry or allowlist"
+    },
+    {
+      "entry": {
+        "id": "claude-settings-local",
+        "path": ".claude/settings.local.json",
+        "absolute": "C:\\Users\\windows\\claudeclaw-os\\.claude\\settings.local.json",
+        "policy": "GATE",
+        "section": "shared_config_surfaces"
+      },
+      "committedHash": "NOT_IN_GIT",
+      "workingHash": "666048c9d395c822389addccfec540c49f9d911a1ba8596744801987002c3a2c",
+      "explanation": "unlogged",
+      "detail": "File differs from committed state with no hive_mind entry or allowlist"
+    },
+    {
+      "entry": {
+        "id": "claudeignore",
+        "path": ".claudeignore",
+        "absolute": "C:\\Users\\windows\\claudeclaw-os\\.claudeignore",
+        "policy": "GATE",
+        "section": "shared_config_surfaces"
+      },
+      "committedHash": "NOT_IN_GIT",
+      "workingHash": "a2ad8e8681e9ffddfeb4fcf453868c87f91e902f9d115f38f84fe961b59a0682",
+      "explanation": "unlogged",
+      "detail": "File differs from committed state with no hive_mind entry or allowlist"
+    },
+    {
+      "entry": {
+        "id": "codex-config",
+        "path": "~/.codex/config.toml",
+        "absolute": "C:\\Users\\windows\\.codex\\config.toml",
+        "policy": "GATE",
+        "section": "shared_config_surfaces"
+      },
+      "committedHash": "NOT_IN_GIT",
+      "workingHash": "f7bab332c3ce52b35648fddd2d438210cf39320ab23c365d0c851d0c2374429b",
+      "explanation": "unlogged",
+      "detail": "File differs from committed state with no hive_mind entry or allowlist"
+    },
+    {
+      "entry": {
+        "id": "self-governance",
+        "path": "src/gate/governed-surface-registry.json",
+        "absolute": "C:\\Users\\windows\\claudeclaw-os\\src\\gate\\governed-surface-registry.json",
+        "policy": "GATE",
+        "section": "self_governance"
+      },
+      "committedHash": "NOT_IN_GIT",
+      "workingHash": "59baa67240c9c32e3cf98e7139605497afbe392663275433afe7063b76ea20f2",
+      "explanation": "unlogged",
+      "detail": "File differs from committed state with no hive_mind entry or allowlist"
+    }
+  ],
+  "clean_surfaces": 0,
+  "is_first_run": true
+}

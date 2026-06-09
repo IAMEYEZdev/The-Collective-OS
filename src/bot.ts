@@ -37,6 +37,7 @@ import { logger } from './logger.js';
 import { downloadMedia, buildPhotoMessage, buildDocumentMessage, buildVideoMessage } from './media.js';
 import { buildMemoryContext, evaluateMemoryRelevance, saveConversationTurn, shouldNudgeMemory, MEMORY_NUDGE_TEXT } from './memory.js';
 import { flushIngestionBuffer } from './memory-ingest.js';
+import { applyBrandVoiceGate, buildHiveNotification, checkFileExtension } from './brand-voice-gate.js';
 import { runConsolidation } from './memory-consolidate.js';
 import { classifyMessageComplexity } from './message-classifier.js';
 import { enrichPrompt } from './context-injector/index.js';
@@ -180,7 +181,7 @@ const slackState = new Map<string, SlackState>();
  * Escape a string for safe inclusion in Telegram HTML messages.
  * Prevents injection of HTML tags from external content (e.g. WhatsApp messages).
  */
-function escapeHtml(s: string): string {
+export function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
@@ -523,7 +524,27 @@ async function handleMessage(ctx: Context, message: string, forceVoiceReply = fa
 
       // Strip [SEND_FILE:...]/[SEND_PHOTO:...] markers from delegated agent output
       // and upload referenced files as real Telegram attachments.
-      const { text: delegationText, files: delegationFiles } = extractFileMarkers(response);
+      const { text: delegationTextRaw, files: delegationFiles } = extractFileMarkers(response);
+
+      // Brand voice gate on delegated agent output (attributed to producing agent)
+      const delegBv = applyBrandVoiceGate(delegationTextRaw, delegation.agentId);
+      const delegationText = delegBv.cleaned;
+      if (delegBv.violations.length > 0 || delegBv.advisories.length > 0) {
+        const hiveMsg = buildHiveNotification(delegation.agentId, delegBv.violations, delegBv.advisories);
+        if (hiveMsg) {
+          try { logToHiveMind(delegation.agentId, chatIdStr, 'brand-voice-violation', hiveMsg); } catch {}
+        }
+      }
+
+      // Block .md files (R7)
+      for (const file of delegationFiles) {
+        const check = checkFileExtension(file.filePath);
+        if (check.blocked) {
+          file.filePath = '';
+          logger.warn({ filePath: file.filePath }, `Brand voice gate: ${check.reason}`);
+        }
+      }
+
       await sendFileMarkers(ctx.api, chatId, delegationFiles);
 
       const relayText = delegationText ? `${header}\n\n${delegationText}` : header;
@@ -797,7 +818,26 @@ async function handleMessage(ctx: Context, message: string, forceVoiceReply = fa
     }
 
     // Extract file markers before any formatting
-    const { text: responseText, files: fileMarkers } = extractFileMarkers(rawResponse);
+    const { text: responseTextRaw, files: fileMarkers } = extractFileMarkers(rawResponse);
+
+    // Brand voice gate: correct-and-notify-and-track (Item 5, L2 fix)
+    const bvResult = applyBrandVoiceGate(responseTextRaw, AGENT_ID);
+    const responseText = bvResult.cleaned;
+    if (bvResult.violations.length > 0 || bvResult.advisories.length > 0) {
+      const hiveMsg = buildHiveNotification(AGENT_ID, bvResult.violations, bvResult.advisories);
+      if (hiveMsg) {
+        try { logToHiveMind(AGENT_ID, chatIdStr, 'brand-voice-violation', hiveMsg); } catch {}
+      }
+    }
+
+    // Block .md files in SEND_FILE markers (R7)
+    for (const file of fileMarkers) {
+      const check = checkFileExtension(file.filePath);
+      if (check.blocked) {
+        file.filePath = ''; // prevent send
+        logger.warn({ filePath: file.filePath }, `Brand voice gate: ${check.reason}`);
+      }
+    }
 
     // Add cost footer
     const costFooter = buildCostFooter(SHOW_COST_FOOTER, result.usage, effectiveModel);
@@ -1953,10 +1993,30 @@ async function processDashboardMessage(
     // [SEND_FILE:...]/[SEND_PHOTO:...] markers and upload the referenced
     // files as real Telegram attachments rather than leaking the path
     // as text.
-    const { text: responseText, files: dashboardFiles } = extractFileMarkers(rawResponse);
+    const { text: dashResponseRaw, files: dashboardFiles } = extractFileMarkers(rawResponse);
+
+    // Brand voice gate on dashboard relay (Path C)
+    const dashBv = applyBrandVoiceGate(dashResponseRaw, AGENT_ID);
+    const dashResponseText = dashBv.cleaned;
+    if (dashBv.violations.length > 0 || dashBv.advisories.length > 0) {
+      const hiveMsg = buildHiveNotification(AGENT_ID, dashBv.violations, dashBv.advisories);
+      if (hiveMsg) {
+        try { logToHiveMind(AGENT_ID, chatIdStr, 'brand-voice-violation', hiveMsg); } catch {}
+      }
+    }
+
+    // Block .md files (R7)
+    for (const file of dashboardFiles) {
+      const check = checkFileExtension(file.filePath);
+      if (check.blocked) {
+        file.filePath = '';
+        logger.warn({ filePath: file.filePath }, `Brand voice gate: ${check.reason}`);
+      }
+    }
+
     await sendFileMarkers(botApi, parseInt(chatIdStr), dashboardFiles);
-    if (responseText) {
-      for (const part of splitMessage(formatForTelegram(responseText))) {
+    if (dashResponseText) {
+      for (const part of splitMessage(formatForTelegram(dashResponseText))) {
         await botApi.sendMessage(parseInt(chatIdStr), part, { parse_mode: 'HTML' });
       }
     }

@@ -26,8 +26,8 @@ export class ClawCodeRAGClient {
         body: JSON.stringify({ query: question, top_k: topK }),
       });
       if (!res.ok) return [];
-      const data = await res.json();
-      return (data.results || []) as RAGResult[];
+      const data = (await res.json()) as { results?: RAGResult[] };
+      return data.results ?? [];
     } catch {
       return [];
     }

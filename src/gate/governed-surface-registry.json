@@ -1,0 +1,627 @@
+{
+  "$schema": "governed-surface-registry/v2",
+  "version": "2.0.0",
+  "generated": "2026-06-03T23:00:00Z",
+  "generated_from": "LIVE_SYSTEM_SCAN + JASON_CHECKPOINT_1_RULINGS + GATE-I2_CLASS_AUDIT",
+  "note": "This registry IS a governed surface. Modifications require Jason sign-off.",
+  "path_count": 40,
+  "path_count_breakdown": {
+    "memory_stores": 5,
+    "verify_surfaces": 3,
+    "governance_surfaces": 17,
+    "runtime_machinery": 8,
+    "shared_config_surfaces": 6,
+    "self_governance": 1,
+    "total": 39,
+    "irreversible_action_classes": 8
+  },
+  "policy_definitions": {
+    "GATE": "Decision surfaces and substrate. Action-time interceptor HALTS execution and surfaces ruling to operator before proceeding. Used for stores, governance files, config, and enforcement machinery.",
+    "VERIFY": "High-volume integrity surfaces. Post-write verification mandatory (file confirmed on disk), but NO gate halt. Destruction still covered by file-delete-bulk irreversible action class. Used where automated hooks must write without blocking."
+  },
+  "rulings_applied": {
+    "checkpoint": "CHECKPOINT_1",
+    "date": "2026-06-03",
+    "authority": "Jason",
+    "skipped": [
+      {
+        "id": "ruvector-db",
+        "reason": "Experimental, not read by production recall, rebuildable. Mark deprecated or delete. Re-enters only if it enters production recall path."
+      },
+      {
+        "id": "codegraph-db",
+        "reason": "Derived index, source already governed. Skip."
+      },
+      {
+        "id": "competitor-monitor-db",
+        "reason": "Working product, not substrate. Re-enters if any becomes canonical home other agents rely on."
+      },
+      {
+        "id": "research-projects-db",
+        "reason": "Working product, not substrate. Same condition."
+      },
+      {
+        "id": "pending-uplift-db",
+        "reason": "Working product, not substrate. Same condition."
+      }
+    ],
+    "added": [
+      "codex-global-agents-md",
+      "project-agents-md",
+      "gate-module",
+      "neo-dispatch",
+      "scheduler-source",
+      "brand-voice-gate"
+    ],
+    "reclassified": [
+      "agent-output-dirs: GATE->VERIFY",
+      "hermes-traces: remains GATE (direct fs writes, not agent tool calls)"
+    ],
+    "confirmed": {
+      "crons": "scheduled_tasks table lives in store/claudeclaw.db (db.ts line 73). Annotated on hive-sqlite entry.",
+      "workspace_db_count": "3 in registry + ruvector was the 4th. All 4 ruled SKIP. Count reconciled.",
+      "gemini_context_cache": "Not found on disk. Struck from design doc store list."
+    }
+  },
+  "memory_stores": {
+    "description": "Persistent data stores the system writes to. All GATE policy.",
+    "stores": [
+      {
+        "id": "hive-sqlite",
+        "policy": "GATE",
+        "path": "store/claudeclaw.db",
+        "absolute": "C:\\Users\\windows\\claudeclaw-os\\store\\claudeclaw.db",
+        "scope": "project",
+        "writers": [
+          "src/db.ts",
+          "src/hive-cli.ts",
+          "src/compile-cli.ts"
+        ],
+        "verified": true,
+        "tables": [
+          "hive_mind",
+          "memories",
+          "conversation_log",
+          "scheduled_tasks",
+          "sessions",
+          "consolidations",
+          "wa_message_map",
+          "wa_outbox",
+          "wa_messages",
+          "token_usage",
+          "slack_messages",
+          "inter_agent_tasks",
+          "mission_tasks",
+          "meet_sessions",
+          "warroom_meetings",
+          "warroom_transcript",
+          "audit_log",
+          "compaction_events",
+          "skill_health",
+          "skill_usage",
+          "session_summaries",
+          "pending_uplift",
+          "board_audit_log",
+          "board_status_history"
+        ],
+        "note": "Primary substrate. Includes scheduled_tasks (cron table) confirmed in db.ts line 73."
+      },
+      {
+        "id": "goal-sqlite",
+        "policy": "GATE",
+        "path": "~/.claude/goal/goals.sqlite",
+        "absolute": "C:\\Users\\windows\\.claude\\goal\\goals.sqlite",
+        "scope": "user-global",
+        "writers": [
+          "goal skill/CLI"
+        ],
+        "verified": true
+      },
+      {
+        "id": "basic-memory-sqlite",
+        "policy": "GATE",
+        "path": "~/.basic-memory/memory.db",
+        "absolute": "C:\\Users\\windows\\.basic-memory\\memory.db",
+        "scope": "user-global",
+        "writers": [
+          "basic-memory MCP server"
+        ],
+        "verified": true
+      },
+      {
+        "id": "obsidian-vault",
+        "policy": "GATE",
+        "path": "C:\\Users\\windows\\Unimatrix1",
+        "absolute": "C:\\Users\\windows\\Unimatrix1",
+        "scope": "user-global",
+        "writers": [
+          "basic-memory",
+          "manual"
+        ],
+        "verified": true,
+        "type": "directory"
+      },
+      {
+        "id": "hermes-skills",
+        "policy": "GATE",
+        "path": "store/hermes-skills/",
+        "absolute": "C:\\Users\\windows\\claudeclaw-os\\store\\hermes-skills",
+        "scope": "project",
+        "writers": [
+          "src/hermes/skill-file.ts"
+        ],
+        "verified": true,
+        "type": "directory",
+        "note": "Skills alter agent behavior. GATE required."
+      }
+    ]
+  },
+  "verify_surfaces": {
+    "description": "High-volume integrity surfaces. Post-write verification mandatory, no gate halt. Destruction covered by file-delete-bulk.",
+    "surfaces": [
+      {
+        "id": "agent-output-dirs",
+        "policy": "VERIFY",
+        "path_pattern": "agents/*/output/**",
+        "absolute_pattern": "C:\\Users\\windows\\claudeclaw-os\\agents\\*\\output\\**",
+        "scope": "project",
+        "writers": [
+          "all 6 agents"
+        ],
+        "verified": true,
+        "type": "directory",
+        "agents": [
+          "comms",
+          "content",
+          "custom",
+          "melanie",
+          "ops",
+          "research"
+        ],
+        "note": "Work product, not substrate. Reclassified from GATE per Jason Checkpoint 1 ruling. Pre-compact snapshot hook writes here and must not be blocked."
+      },
+      {
+        "id": "hermes-traces",
+        "policy": "VERIFY",
+        "path": "store/hermes-traces/",
+        "absolute": "C:\\Users\\windows\\claudeclaw-os\\store\\hermes-traces",
+        "scope": "project",
+        "writers": [
+          "src/hermes/trace.ts"
+        ],
+        "verified": true,
+        "type": "directory",
+        "note": "Traces are automated high-volume writes. Direct fs (not agent tool calls). VERIFY per never-gate-automated-hooks principle."
+      },
+      {
+        "id": "drift-allowlist",
+        "policy": "VERIFY",
+        "path": "store/drift-allowlist.json",
+        "absolute": "C:\\Users\\windows\\claudeclaw-os\\store\\drift-allowlist.json",
+        "scope": "project",
+        "writers": [
+          "drift-detector (manual entries)",
+          "operator"
+        ],
+        "verified": true,
+        "note": "Drift detector allowlist. 24h auto-expiry entries. VERIFY policy: automated hooks must not be blocked."
+      }
+    ]
+  },
+  "governance_surfaces": {
+    "description": "Files that control agent behavior, system prompts, and execution rules. All GATE policy.",
+    "surfaces": [
+      {
+        "id": "root-claude-md",
+        "policy": "GATE",
+        "path": "CLAUDE.md",
+        "absolute": "C:\\Users\\windows\\claudeclaw-os\\CLAUDE.md",
+        "scope": "project",
+        "controls": "Primary system prompt for all agents. Constitutional doctrine, orchestrator DNA, all standing rules.",
+        "authority_level": "project-config (highest for Claude Code)",
+        "verified": true
+      },
+      {
+        "id": "global-claude-md",
+        "policy": "GATE",
+        "path": "~/.claude/CLAUDE.md",
+        "absolute": "C:\\Users\\windows\\.claude\\CLAUDE.md",
+        "scope": "user-global",
+        "controls": "Global instructions applied to ALL projects",
+        "authority_level": "user-config",
+        "verified": true
+      },
+      {
+        "id": "agent-claude-md-template",
+        "policy": "GATE",
+        "path": "agents/_template/CLAUDE.md",
+        "absolute": "C:\\Users\\windows\\claudeclaw-os\\agents\\_template\\CLAUDE.md",
+        "scope": "project",
+        "controls": "Template for new agent CLAUDE.md files",
+        "verified": true
+      },
+      {
+        "id": "agent-comms-claude-md",
+        "policy": "GATE",
+        "path": "agents/comms/CLAUDE.md",
+        "absolute": "C:\\Users\\windows\\claudeclaw-os\\agents\\comms\\CLAUDE.md",
+        "scope": "project",
+        "controls": "James (comms agent) system prompt",
+        "verified": true
+      },
+      {
+        "id": "agent-ops-claude-md",
+        "policy": "GATE",
+        "path": "agents/ops/CLAUDE.md",
+        "absolute": "C:\\Users\\windows\\claudeclaw-os\\agents\\ops\\CLAUDE.md",
+        "scope": "project",
+        "controls": "Sean (ops agent) system prompt",
+        "verified": true
+      },
+      {
+        "id": "agent-research-claude-md",
+        "policy": "GATE",
+        "path": "agents/research/CLAUDE.md",
+        "absolute": "C:\\Users\\windows\\claudeclaw-os\\agents\\research\\CLAUDE.md",
+        "scope": "project",
+        "controls": "Annika (research agent) system prompt",
+        "verified": true
+      },
+      {
+        "id": "agent-custom-claude-md",
+        "policy": "GATE",
+        "path": "agents/custom/CLAUDE.md",
+        "absolute": "C:\\Users\\windows\\claudeclaw-os\\agents\\custom\\CLAUDE.md",
+        "scope": "project",
+        "controls": "Jackson (CRM/sales agent) system prompt",
+        "verified": true
+      },
+      {
+        "id": "agent-content-claude-md",
+        "policy": "GATE",
+        "path": "agents/content/CLAUDE.md",
+        "absolute": "C:\\Users\\windows\\claudeclaw-os\\agents\\content\\CLAUDE.md",
+        "scope": "project",
+        "controls": "Melissa (content agent) system prompt",
+        "verified": true
+      },
+      {
+        "id": "codex-global-agents-md",
+        "policy": "GATE",
+        "path": "~/.codex/AGENTS.md",
+        "absolute": "C:\\Users\\windows\\.codex\\AGENTS.md",
+        "scope": "user-global",
+        "controls": "Global Codex agent instructions. Proven production injection path (C2 proof: 5/5 PASS).",
+        "authority_level": "user-config (Codex equivalent of global CLAUDE.md)",
+        "verified": true,
+        "added_by": "CHECKPOINT_1_RULING"
+      },
+      {
+        "id": "project-agents-md",
+        "policy": "GATE",
+        "path": "AGENTS.md",
+        "absolute": "C:\\Users\\windows\\claudeclaw-os\\AGENTS.md",
+        "scope": "project",
+        "controls": "Project-root Codex agent instructions. Gate halt-delivery surface on Codex harness.",
+        "authority_level": "project-config (Codex equivalent of root CLAUDE.md)",
+        "verified": true,
+        "disk_state": "Created in Step 4. AGENTS.md now on disk at project root.",
+        "added_by": "CHECKPOINT_1_RULING"
+      },
+      {
+        "id": "hook-auto-checkpoint",
+        "policy": "GATE",
+        "path": "~/.claude/hooks/auto-checkpoint-60.mjs",
+        "absolute": "C:\\Users\\windows\\.claude\\hooks\\auto-checkpoint-60.mjs",
+        "scope": "user-global",
+        "controls": "Auto-checkpoint after 60 turns",
+        "verified": true
+      },
+      {
+        "id": "hook-context-mode-cache-heal",
+        "policy": "GATE",
+        "path": "~/.claude/hooks/context-mode-cache-heal.mjs",
+        "absolute": "C:\\Users\\windows\\.claude\\hooks\\context-mode-cache-heal.mjs",
+        "scope": "user-global",
+        "controls": "Context-mode cache healing on session start",
+        "verified": true
+      },
+      {
+        "id": "hook-pre-compact-snapshot",
+        "policy": "GATE",
+        "path": "~/.claude/hooks/pre-compact-snapshot.mjs",
+        "absolute": "C:\\Users\\windows\\.claude\\hooks\\pre-compact-snapshot.mjs",
+        "scope": "user-global",
+        "controls": "Snapshot state before compaction events",
+        "verified": true
+      },
+      {
+        "id": "hook-session-context-inject",
+        "policy": "GATE",
+        "path": "~/.claude/hooks/session-context-inject.mjs",
+        "absolute": "C:\\Users\\windows\\.claude\\hooks\\session-context-inject.mjs",
+        "scope": "user-global",
+        "controls": "Injects session context (memory, observations, behavioral modes) at session start",
+        "verified": true
+      },
+      {
+        "id": "project-skills",
+        "policy": "GATE",
+        "path_pattern": ".claude/skills/*/SKILL.md",
+        "absolute_pattern": "C:\\Users\\windows\\claudeclaw-os\\.claude\\skills\\*\\SKILL.md",
+        "scope": "project",
+        "controls": "Project-local skill definitions (4 active: add-migration, taste-skill, impeccable, emil-skill)",
+        "verified": true
+      },
+      {
+        "id": "global-skills",
+        "policy": "GATE",
+        "path_pattern": "~/.claude/skills/*/SKILL.md",
+        "absolute_pattern": "C:\\Users\\windows\\.claude\\skills\\*\\SKILL.md",
+        "scope": "user-global",
+        "controls": "44 global skill definitions. Each controls a distinct agent capability.",
+        "verified": true
+      },
+      {
+        "id": "directives-ledger",
+        "policy": "GATE",
+        "path": "artifacts/directives/DIRECTIVES-LEDGER.jsonl",
+        "scope": "project",
+        "controls": "Canonical directive lifecycle ledger. Append-only. All CLAUDE.md directive blocks derived from this file.",
+        "checkpoint_1": "RULED: registered per DIRECTIVES-001 spec Section 9",
+        "absolute": "C:\\Users\\windows\\claudeclaw-os\\artifacts\\directives\\DIRECTIVES-LEDGER.jsonl",
+        "verified": true
+      }
+    ]
+  },
+  "runtime_machinery": {
+    "description": "Enforcement modules, dispatch infrastructure, verification code, and tool-execution seams. All GATE policy. Standing rule: every new enforcement module enters registry at creation. Class rule (GATE-I2): controls agent behavior or enforcement wiring = governed; reads/monitors state = not governed.",
+    "surfaces": [
+      {
+        "id": "gate-module",
+        "policy": "GATE",
+        "path_pattern": "src/gate/**",
+        "absolute_pattern": "C:\\Users\\windows\\claudeclaw-os\\src\\gate\\**",
+        "scope": "project",
+        "controls": "Decision-Surfacing Gate enforcement code. Plan-time classifier, action-time interceptor, registry.",
+        "verified": true,
+        "added_by": "CHECKPOINT_1_RULING"
+      },
+      {
+        "id": "neo-dispatch",
+        "policy": "GATE",
+        "path": "scripts/neo-dispatch.mjs",
+        "absolute": "C:\\Users\\windows\\claudeclaw-os\\scripts\\neo-dispatch.mjs",
+        "scope": "project",
+        "controls": "Neo sub-agent dispatch infrastructure. Controls which roles execute and how tasks route.",
+        "verified": true,
+        "added_by": "CHECKPOINT_1_RULING"
+      },
+      {
+        "id": "scheduler-source",
+        "policy": "GATE",
+        "path": "src/scheduler.ts",
+        "absolute": "C:\\Users\\windows\\claudeclaw-os\\src\\scheduler.ts",
+        "scope": "project",
+        "controls": "Task scheduler. Controls cron execution, polling intervals, agent dispatch timing.",
+        "verified": true,
+        "added_by": "CHECKPOINT_1_RULING"
+      },
+      {
+        "id": "brand-voice-gate",
+        "policy": "GATE",
+        "path": "src/brand-voice-gate.ts",
+        "absolute": "C:\\Users\\windows\\claudeclaw-os\\src\\brand-voice-gate.ts",
+        "scope": "project",
+        "controls": "Brand voice enforcement. Blocks humanization violations before external publish.",
+        "verified": true,
+        "added_by": "CHECKPOINT_1_RULING"
+      },
+      {
+        "id": "bot-source",
+        "policy": "GATE",
+        "path": "src/bot.ts",
+        "absolute": "C:\\Users\\windows\\claudeclaw-os\\src\\bot.ts",
+        "scope": "project",
+        "controls": "Main message handler. All agent output flows through this file. GATE-I1 sealing target for interceptWrite.",
+        "verified": true,
+        "added_by": "GATE-I2_CLASS_AUDIT",
+        "class_rule": "controls agent behavior or enforcement wiring = governed; reads/monitors state = not"
+      },
+      {
+        "id": "orchestrator-source",
+        "policy": "GATE",
+        "path": "src/orchestrator.ts",
+        "absolute": "C:\\Users\\windows\\claudeclaw-os\\src\\orchestrator.ts",
+        "scope": "project",
+        "controls": "Delegation engine. Controls which agents receive tasks and how handoffs route. GATE-I1 sealing target for interceptWrite.",
+        "verified": true,
+        "added_by": "GATE-I2_CLASS_AUDIT",
+        "class_rule": "controls agent behavior or enforcement wiring = governed; reads/monitors state = not"
+      },
+      {
+        "id": "index-source",
+        "policy": "GATE",
+        "path": "src/index.ts",
+        "absolute": "C:\\Users\\windows\\claudeclaw-os\\src\\index.ts",
+        "scope": "project",
+        "controls": "Process bootstrap. Wires initGate, initScheduler, createBot. Removing a gate import here silently disables enforcement.",
+        "verified": true,
+        "added_by": "GATE-I2_CLASS_AUDIT",
+        "class_rule": "controls agent behavior or enforcement wiring = governed; reads/monitors state = not"
+      },
+      {
+        "id": "schedule-cli-source",
+        "policy": "GATE",
+        "path": "src/schedule-cli.ts",
+        "absolute": "C:\\Users\\windows\\claudeclaw-os\\src\\schedule-cli.ts",
+        "scope": "project",
+        "controls": "Task creation CLI. Writes rows that drive agent routing. Invariant 3 guard target. Registered BEFORE routing fix per F9-sequence prevention.",
+        "verified": true,
+        "added_by": "GATE-I2_CLASS_AUDIT",
+        "class_rule": "controls agent behavior or enforcement wiring = governed; reads/monitors state = not"
+      }
+    ]
+  },
+  "shared_config_surfaces": {
+    "description": "Configuration files that change system behavior when modified. All GATE policy.",
+    "surfaces": [
+      {
+        "id": "env-file",
+        "policy": "GATE",
+        "path": ".env",
+        "absolute": "C:\\Users\\windows\\claudeclaw-os\\.env",
+        "scope": "project",
+        "controls": "API keys, model routing, feature flags, service endpoints",
+        "verified": true,
+        "sensitivity": "HIGH -- contains credentials"
+      },
+      {
+        "id": "mcp-config",
+        "policy": "GATE",
+        "path": ".mcp.json",
+        "absolute": "C:\\Users\\windows\\claudeclaw-os\\.mcp.json",
+        "scope": "project",
+        "controls": "MCP server connections -- determines which tools agents can access",
+        "verified": true
+      },
+      {
+        "id": "claude-settings",
+        "policy": "GATE",
+        "path": ".claude/settings.json",
+        "absolute": "C:\\Users\\windows\\claudeclaw-os\\.claude\\settings.json",
+        "scope": "project",
+        "controls": "Compaction window, deny permissions, tool access rules",
+        "verified": true
+      },
+      {
+        "id": "claude-settings-local",
+        "policy": "GATE",
+        "path": ".claude/settings.local.json",
+        "absolute": "C:\\Users\\windows\\claudeclaw-os\\.claude\\settings.local.json",
+        "scope": "project",
+        "controls": "Local MCP server enable/disable state",
+        "verified": true
+      },
+      {
+        "id": "claudeignore",
+        "policy": "GATE",
+        "path": ".claudeignore",
+        "absolute": "C:\\Users\\windows\\claudeclaw-os\\.claudeignore",
+        "scope": "project",
+        "controls": "Files excluded from agent context visibility",
+        "verified": true
+      },
+      {
+        "id": "codex-config",
+        "policy": "GATE",
+        "path": "~/.codex/config.toml",
+        "absolute": "C:\\Users\\windows\\.codex\\config.toml",
+        "scope": "user-global",
+        "controls": "Codex CLI model, auth, hooks, developer_instructions",
+        "verified": true
+      }
+    ]
+  },
+  "irreversible_actions": {
+    "description": "Actions that cannot be undone once executed. Always GATE regardless of target path.",
+    "actions": [
+      {
+        "id": "publish",
+        "policy": "GATE",
+        "description": "Publishing content to external platforms (LinkedIn, social media, blog)",
+        "tool_patterns": [
+          "linkedin-pp-cli publish",
+          "linkedin-pp-cli post"
+        ],
+        "severity": "HIGH"
+      },
+      {
+        "id": "send-message",
+        "policy": "GATE",
+        "description": "Sending messages to external recipients (Telegram to Jason, email, DMs)",
+        "tool_patterns": [
+          "notify.sh",
+          "scripts/notify.sh",
+          "Telegram send",
+          "gmail send"
+        ],
+        "severity": "HIGH"
+      },
+      {
+        "id": "deploy",
+        "policy": "GATE",
+        "description": "Deploying code or services to production environments",
+        "tool_patterns": [
+          "npm run deploy",
+          "docker deploy",
+          "git push to production"
+        ],
+        "severity": "CRITICAL"
+      },
+      {
+        "id": "merge-shared-remote",
+        "policy": "GATE",
+        "description": "Merging branches on shared remote repositories",
+        "tool_patterns": [
+          "git merge to main/master on remote",
+          "gh pr merge"
+        ],
+        "severity": "HIGH"
+      },
+      {
+        "id": "push-shared-remote",
+        "policy": "GATE",
+        "description": "Pushing commits to shared remote branches",
+        "tool_patterns": [
+          "git push origin main",
+          "git push origin master",
+          "git push --force"
+        ],
+        "severity": "HIGH"
+      },
+      {
+        "id": "production-credential-mutation",
+        "policy": "GATE",
+        "description": "Modifying production API keys, tokens, or secrets",
+        "tool_patterns": [
+          ".env write",
+          "credential rotation",
+          "key generation"
+        ],
+        "severity": "CRITICAL"
+      },
+      {
+        "id": "database-destructive",
+        "policy": "GATE",
+        "description": "DROP, TRUNCATE, DELETE without WHERE, schema migration on production stores",
+        "tool_patterns": [
+          "DROP TABLE",
+          "TRUNCATE",
+          "DELETE FROM (no WHERE)",
+          "ALTER TABLE (production)"
+        ],
+        "severity": "CRITICAL"
+      },
+      {
+        "id": "file-delete-bulk",
+        "policy": "GATE",
+        "description": "Recursive or bulk file deletion outside tmp/",
+        "tool_patterns": [
+          "rm -rf",
+          "rmSync recursive",
+          "del /s"
+        ],
+        "severity": "HIGH"
+      }
+    ]
+  },
+  "self_governance": {
+    "id": "self-governance",
+    "policy": "GATE",
+    "description": "This registry file is itself a governed surface.",
+    "path": "src/gate/governed-surface-registry.json",
+    "absolute": "C:\\Users\\windows\\claudeclaw-os\\src\\gate\\governed-surface-registry.json",
+    "rule": "Modifications to this file require Jason sign-off. The action-time interceptor MUST gate writes to this path."
+  }
+}

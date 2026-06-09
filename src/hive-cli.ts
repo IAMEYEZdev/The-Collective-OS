@@ -9,6 +9,7 @@
  *   node dist/hive-cli.js log "action" "summary"              — write to hive mind
  *   node dist/hive-cli.js log "action" "summary" "artifacts"  — write with artifacts
  *   node dist/hive-cli.js log ... --hemisphere biz|eng|xhemi  — route via clawhip channel
+ *   node dist/hive-cli.js log ... --verify-path <path>       — block log unless file exists on disk
  *   node dist/hive-cli.js read [N]                            — read last N hive mind entries (default 20)
  *   node dist/hive-cli.js convolife                           — context window stats
  *   node dist/hive-cli.js checkpoint "summary text"           — save checkpoint memory
@@ -28,6 +29,7 @@ import {
 } from './db.js';
 import Database from 'better-sqlite3';
 import path from 'path';
+import { existsSync } from 'fs';
 import { getClient, type AgentName } from './collectiveboard/index.js';
 
 // Resolve project root: use CLAUDECLAW_PROJECT_ROOT env var (set by the Node process),
@@ -64,6 +66,12 @@ const LIMIT_OVERRIDE = limitFlagIdx !== -1 && process.argv[limitFlagIdx + 1]
 
 // Parse --board flag (boolean, no value) to push log entry to CollectiveBoard
 const BOARD_SYNC = process.argv.includes('--board');
+
+// Parse --verify-path flag: path that MUST exist on disk before hive log succeeds
+const verifyFlagIdx = process.argv.indexOf('--verify-path');
+const VERIFY_PATH = verifyFlagIdx !== -1 && process.argv[verifyFlagIdx + 1]
+  ? process.argv[verifyFlagIdx + 1]!
+  : undefined;
 
 // Parse --hemisphere flag for clawhip channel routing (biz|eng|xhemi, default biz)
 const hemiFlagIdx = process.argv.indexOf('--hemisphere');
@@ -134,9 +142,9 @@ function getChatId(): string {
 
 // Strip --agent, --chat, --limit, --board, and --hemisphere flags from argv to get positional args
 const filteredArgs = process.argv.slice(2).filter((_, i, arr) => {
-  if (arr[i] === '--agent' || arr[i] === '--chat' || arr[i] === '--limit' || arr[i] === '--hemisphere') return false;
+  if (arr[i] === '--agent' || arr[i] === '--chat' || arr[i] === '--limit' || arr[i] === '--hemisphere' || arr[i] === '--verify-path') return false;
   if (arr[i] === '--board') return false;
-  if (i > 0 && (arr[i - 1] === '--agent' || arr[i - 1] === '--chat' || arr[i - 1] === '--limit' || arr[i - 1] === '--hemisphere')) return false;
+  if (i > 0 && (arr[i - 1] === '--agent' || arr[i - 1] === '--chat' || arr[i - 1] === '--limit' || arr[i - 1] === '--hemisphere' || arr[i - 1] === '--verify-path')) return false;
   return true;
 });
 
@@ -189,6 +197,57 @@ switch (command) {
         console.error('Bypass (audit-visible): set CLAUDECLAW_HIVE_BYPASS=1');
         process.exit(2);
       }
+    }
+
+    // Post-write verification gate: verifies claimed files exist on disk before
+    // allowing hive success log. Two modes:
+    //   1. Explicit: --verify-path <path> (always checked)
+    //   2. Automatic: when artifacts arg looks like a file path (conservative detection)
+    // Escape hatch: prefix artifacts with "nopath:" to skip auto-detection.
+    // Failed verification = visible error + exit(3), never silent skip.
+
+    /**
+     * Detect whether a string looks like a verifiable file path (conservative).
+     * Returns the path to verify, or null if not path-like.
+     */
+    function detectVerifiablePath(s: string): string | null {
+      const trimmed = s.trim();
+      // Escape hatch: explicit opt-out
+      if (trimmed.startsWith('nopath:')) return null;
+      // URLs are not local paths
+      if (/^https?:\/\//i.test(trimmed)) return null;
+      // Template placeholders are not real paths
+      if (/<[^>]+>/.test(trimmed) || /\{[^}]+\}/.test(trimmed)) return null;
+      // Multiple space-separated tokens = probably a description, not a path
+      if (trimmed.split(/\s+/).length > 2) return null;
+
+      // Positive signals: absolute path, relative path prefix, or known project dirs
+      const isAbsUnix = trimmed.startsWith('/');
+      const isAbsWin = /^[A-Za-z]:[\\\/]/.test(trimmed);
+      const isRelative = trimmed.startsWith('./') || trimmed.startsWith('../');
+      const hasProjectDir = /(?:^|\/)(?:agents|workspace|output|tmp)\//.test(trimmed);
+
+      if (isAbsUnix || isAbsWin || isRelative || hasProjectDir) return trimmed;
+      return null;
+    }
+
+    // Determine path to verify: explicit flag takes priority, then auto-detect from artifacts
+    const verifyTarget = VERIFY_PATH
+      || (artifacts ? detectVerifiablePath(artifacts) : null);
+
+    if (verifyTarget) {
+      const resolvedPath = path.isAbsolute(verifyTarget)
+        ? verifyTarget
+        : path.resolve(PROJECT_ROOT, verifyTarget);
+      if (!existsSync(resolvedPath)) {
+        console.error(`HIVE LOG BLOCKED [${AGENT_ID}]: post-write verification FAILED`);
+        console.error(`  path: "${resolvedPath}"`);
+        console.error(`  source: ${VERIFY_PATH ? '--verify-path flag' : 'auto-detected from artifacts'}`);
+        console.error('  File does NOT exist on disk. Hive success log suppressed.');
+        console.error('  Fix: confirm the write landed, or prefix artifacts with "nopath:" if not a file.');
+        process.exit(3);
+      }
+      console.log(`Verified on disk: ${resolvedPath}`);
     }
 
     const chatId = getChatId();
@@ -408,6 +467,57 @@ switch (command) {
     break;
   }
 
+  case 'recall': {
+    const recallQuery = filteredArgs[1];
+    if (!recallQuery) {
+      console.error('Usage: hive-cli.js recall "query" [--stores all|hive,goals,...] [--limit 10] [--since 7d]');
+      process.exit(1);
+    }
+    // Forward to recall module
+    const { recall } = await import('./recall.js');
+    let stores: string[] = [];
+    let limit = 10;
+    let sinceMs: number | null = null;
+    for (let i = 2; i < filteredArgs.length; i++) {
+      if (filteredArgs[i] === '--stores' && filteredArgs[i + 1]) {
+        const val = filteredArgs[i + 1]!;
+        stores = val === 'all' ? [] : val.split(',');
+        i++;
+      } else if (filteredArgs[i] === '--limit' && filteredArgs[i + 1]) {
+        limit = parseInt(filteredArgs[i + 1]!, 10) || 10;
+        i++;
+      } else if (filteredArgs[i] === '--since' && filteredArgs[i + 1]) {
+        const match = filteredArgs[i + 1]!.match(/^(\d+)([dhm])$/);
+        if (match) {
+          const value = parseInt(match[1]!, 10);
+          const mult: Record<string, number> = { d: 86400000, h: 3600000, m: 60000 };
+          sinceMs = Date.now() - (value * (mult[match[2]!] || 86400000));
+        }
+        i++;
+      }
+    }
+    const result = await recall({ query: recallQuery, stores, limit, sinceMs });
+    if (result.stores_failed.length > 0) {
+      console.error(`WARNING: ${result.stores_failed.length} store(s) degraded: ${result.stores_failed.join(', ')}`);
+    }
+    if (result.degradation_notice) {
+      console.error(`DEGRADED: ${result.degradation_notice}`);
+    }
+    console.log(`\nRecall: "${result.query}" | ${result.total_results} results from ${result.stores_queried.length} stores\n`);
+    for (let i = 0; i < result.results.length; i++) {
+      const r = result.results[i]!;
+      const score = r.relevance_score.toFixed(3);
+      const agentTag = r.agent ? ` [${r.agent}]` : '';
+      console.log(`  ${i + 1}. [${r.store}/${r.source_type}] ${r.title}${agentTag}`);
+      console.log(`     Score: ${score}`);
+      console.log(`     ${r.snippet}`);
+      if (r.full_path) console.log(`     Path: ${r.full_path}`);
+      console.log('');
+    }
+    if (result.results.length === 0) console.log('No results found.');
+    break;
+  }
+
   default:
     console.error(`Unknown command: ${command || '(none)'}`);
     console.error('');
@@ -420,6 +530,7 @@ switch (command) {
     console.error('  session-info                          — show session and chat ID');
     console.error('  board-audit [--card <id>] [--limit N] — board mutation history');
     console.error('  claw-health                           — claw-code integration health check');
+    console.error('  recall "query" [--stores ...] [--limit N] [--since 7d] — federated recall');
     process.exit(1);
 }
 })().catch(err => { console.error(err); process.exit(1); });

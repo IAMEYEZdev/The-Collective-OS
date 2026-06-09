@@ -28,6 +28,10 @@ const PROJECT_ROOT = path.resolve(__dirname, '..');
 const INBOUND_DIR = path.join(PROJECT_ROOT, 'workspace', 'dispatch', 'inbound');
 const OUTBOUND_DIR = path.join(PROJECT_ROOT, 'workspace', 'dispatch', 'outbound');
 const PROCESSED_MARKER = '.ingested';
+const STALL_CAP_MS = 5 * 60 * 1000; // 5 minutes max for partial results
+
+// Track when we first saw each ULID in partial state (persists across polls in watch mode)
+const partialFirstSeen = new Map(); // ULID → { timestamp, lastHash }
 
 // ── Schema validation ─────────────────────────────────────────────────
 const REQUIRED_FIELDS = ['version', 'ulid', 'status', 'summary'];
@@ -231,18 +235,30 @@ async function pollCycle() {
       continue;
     }
 
-    // Idempotency: check hive for prior ingest
-    try {
-      const searchOutput = execSync(
-        `node "${path.join(PROJECT_ROOT, 'dist', 'hive-cli.js')}" search-memory "neo-result-in ${result.ulid}"`,
-        { cwd: PROJECT_ROOT, stdio: 'pipe' },
-      ).toString();
-      if (searchOutput.includes(result.ulid) && !searchOutput.includes('No matches')) {
-        console.log(`[neo-poll] SKIP: ${result.ulid} already ingested (idempotency check)`);
+    // Idempotency: content-hash check to prevent re-ingesting identical content
+    const contentHash = Buffer.from(JSON.stringify(result)).toString('base64').slice(0, 32);
+    const priorIngest = partialFirstSeen.get(result.ulid);
+    if (priorIngest && priorIngest.lastHash === contentHash) {
+      const elapsed = Date.now() - priorIngest.timestamp;
+      if (result.status === 'partial' && elapsed > STALL_CAP_MS) {
+        console.log(`[neo-poll] STALL CAP: ${result.ulid} stuck partial for ${Math.round(elapsed / 1000)}s (>${STALL_CAP_MS / 1000}s). Skipping until content changes.`);
         markProcessed(resultPath);
         continue;
       }
-    } catch { /* proceed if search fails */ }
+      // Same content, not yet stalled -- skip silently (already ingested)
+      console.log(`[neo-poll] SKIP: ${result.ulid} unchanged since last ingest`);
+      markProcessed(resultPath);
+      continue;
+    }
+
+    // Track this ULID + content state
+    if (!priorIngest) {
+      partialFirstSeen.set(result.ulid, { timestamp: Date.now(), lastHash: contentHash });
+    } else {
+      // Content changed -- reset timer but keep tracking
+      priorIngest.lastHash = contentHash;
+      // Don't reset timestamp: stall cap measures total partial duration
+    }
 
     // Load original dispatch for context
     let dispatchEnvelope = null;
@@ -298,7 +314,10 @@ async function pollCycle() {
       );
     } catch { /* best-effort */ }
 
-    // 7. Status-specific actions
+    // 7. Status-specific actions — clear stall tracker on terminal status
+    if (result.status !== 'partial') {
+      partialFirstSeen.delete(result.ulid);
+    }
     console.log(`[neo-poll] Status: ${result.status} → ${action}`);
 
     if (result.openQuestions?.length) {

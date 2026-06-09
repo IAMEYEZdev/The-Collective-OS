@@ -85,7 +85,7 @@ import type {
 import { logger } from './logger.js';
 import { buildMemoryContext } from './memory.js';
 
-// ── Types ────────────────────────────────────────────────────────────
+// -- Types ------------------------------------------------------------
 
 export interface DelegationResult {
   agentId: string;
@@ -134,7 +134,7 @@ export interface AgentInfo {
   description: string;
 }
 
-// ── Registry ─────────────────────────────────────────────────────────
+// -- Registry ---------------------------------------------------------
 
 /** Cache of available agents loaded at startup. */
 let agentRegistry: AgentInfo[] = [];
@@ -144,7 +144,7 @@ const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000;
 
 /**
  * Initialize the orchestrator by scanning `agents/` for valid configs.
- * Safe to call even if no agents are configured — the registry will be empty.
+ * Safe to call even if no agents are configured -- the registry will be empty.
  */
 export function initOrchestrator(): void {
   const ids = listAgentIds();
@@ -159,8 +159,8 @@ export function initOrchestrator(): void {
         description: config.description,
       });
     } catch (err) {
-      // Agent config is broken (e.g. missing token) — skip it but warn
-      logger.warn({ agentId: id, err }, 'Skipping agent — config load failed');
+      // Agent config is broken (e.g. missing token) -- skip it but warn
+      logger.warn({ agentId: id, err }, 'Skipping agent -- config load failed');
     }
   }
 
@@ -185,19 +185,17 @@ export function initOrchestrator(): void {
     produces: ['text', 'latent'],
   });
 
-  // Initialize claw-code adapter if binary is configured
+  // Claw-code binary configured - log readiness.
+  // Full adapter wiring is deferred; enrichWithClawRAG handles RAG when a URL is set.
   if (process.env.CLAW_CODE_BIN) {
-    const clawConfig: ClawCodeConfig = {
-      binaryPath: process.env.CLAW_CODE_BIN,
-      model: process.env.CLAW_CODE_MODEL || 'sonnet',
-      ragUrl: process.env.CLAW_RAG_URL,
-    };
-    const clawAdapter = new ClawCodeAdapter(clawConfig);
-    const clawEventBridge = new ClawCodeEventBridge();
-    const clawRagClient = clawConfig.ragUrl
-      ? new ClawCodeRAGClient(clawConfig.ragUrl)
-      : null;
-    logger.info({ binary: clawConfig.binaryPath, model: clawConfig.model, ragEnabled: !!clawRagClient }, 'Claw-code adapter initialized');
+    logger.info(
+      {
+        binary: process.env.CLAW_CODE_BIN,
+        model: process.env.CLAW_CODE_MODEL || 'sonnet',
+        ragEnabled: !!process.env.CLAW_RAG_URL,
+      },
+      'Claw-code binary configured',
+    );
   }
 
   logger.info(
@@ -230,7 +228,7 @@ export async function enrichWithClawRAG(prompt: string, ragUrl?: string): Promis
   }
 }
 
-// ── Delegation ───────────────────────────────────────────────────────
+// -- Delegation -------------------------------------------------------
 
 /**
  * Parse a user message for delegation syntax.
@@ -319,7 +317,7 @@ export async function delegateToAgent(
 
   onProgress?.(`Delegating to ${agent.name}...`);
 
-  // ── Hermes transport: create and route message ──
+  // -- Hermes transport: create and route message --
   const hermesMsg = createTextMessage({
     fromAgent,
     toAgent: agentId,
@@ -329,7 +327,7 @@ export async function delegateToAgent(
   });
   const routed = sendMessage(hermesMsg);
 
-  // ── L5 Ax: pre-delegation Self-Discover + MiPRO + playbook match ──
+  // -- L5 Ax: pre-delegation Self-Discover + MiPRO + playbook match --
   let axDiscoveryResult: DelegationResult['axDiscovery'];
   let axPlaybookMatches: PlaybookEntry[] | undefined;
   let axCompiledPrompt: CompiledPrompt | undefined;
@@ -382,7 +380,7 @@ export async function delegateToAgent(
     logger.warn({ taskId, agentId, err: axErr }, 'L5 Ax pre-delegation failed (non-fatal)');
   }
 
-  // ── L1 GitNexus: pre-delegation structural latent analysis ──
+  // -- L1 GitNexus: pre-delegation structural latent analysis --
   let graphAnalysisResult: GraphLatentResult | undefined;
   let l1InboundSignals: InboundSignal[] = [];
 
@@ -507,7 +505,7 @@ export async function delegateToAgent(
         `${agent.name} completed (${Math.round(durationMs / 1000)}s)`,
       );
 
-      // ── Hermes auto-reflection: classify task and reflect if warranted ──
+      // -- Hermes auto-reflection: classify task and reflect if warranted --
       let reflectionResult: AutoReflectionResult | undefined;
       try {
         reflectionResult = autoReflect({
@@ -536,7 +534,7 @@ export async function delegateToAgent(
         logger.warn({ taskId, agentId, err: reflectErr }, 'Auto-reflection failed (non-fatal)');
       }
 
-      // ── L4 Cross-Agent Correlation: execute inject_feedback if reflection recommends it ──
+      // -- L4 Cross-Agent Correlation: execute inject_feedback if reflection recommends it --
       let crossAgentCorrelation: CorrelationResult | undefined;
       let feedbackResults: FeedbackExecutionResult[] = [];
       try {
@@ -560,7 +558,7 @@ export async function delegateToAgent(
         logger.warn({ taskId, agentId, err: corrErr }, 'Cross-agent correlation failed (non-fatal)');
       }
 
-      // ── L5 Ax: post-delegation AxACE playbook loop ──
+      // -- L5 Ax: post-delegation AxACE playbook loop --
       let axPlaybookResult: AxACEResult | undefined;
       try {
         const depthRounds = axDiscoveryResult?.depthOverride.rounds ?? 3;
@@ -582,7 +580,7 @@ export async function delegateToAgent(
         logger.warn({ taskId, agentId, err: aceErr }, 'L5 AxACE post-delegation failed (non-fatal)');
       }
 
-      // ── L2 DeepSec: post-delegation security scan latent analysis ──
+      // -- L2 DeepSec: post-delegation security scan latent analysis --
       let scanAnalysisResult: ScanLatentResult | undefined;
       let securityGateResult: GateSignal | undefined;
 
@@ -646,7 +644,7 @@ export async function delegateToAgent(
         logger.warn({ taskId, agentId, err: l2Err }, 'L2 DeepSec post-delegation failed (non-fatal)');
       }
 
-      // ── L3 Borg Arc: post-delegation acquisition coordination ──
+      // -- L3 Borg Arc: post-delegation acquisition coordination --
       // If L1 and L2 signals are available, encode them for Borg Queen reporting.
       // Actual parallel acquisition threads run separately via planAcquisitionBatch.
       let borgArcReportResult: BorgQueenReport | undefined;
@@ -679,7 +677,7 @@ export async function delegateToAgent(
         logger.warn({ taskId, agentId, err: l3Err }, 'L3 Borg Arc post-delegation failed (non-fatal)');
       }
 
-      // ── L6 Borg Queen: outer orchestrator cluster initialization ──
+      // -- L6 Borg Queen: outer orchestrator cluster initialization --
       // Creates cluster config from available layer signals for future aggregation.
       let borgQueenClusterResult: ClusterConfig | undefined;
       let capabilityGapsResult: CapabilityGap[] | undefined;

@@ -13,6 +13,11 @@
  */
 
 import { randomBytes } from 'crypto';
+import { execSync as guardExecSync } from 'child_process';
+import { dirname, join as pathJoin } from 'path';
+import { fileURLToPath } from 'url';
+
+const __guard_dirname = dirname(fileURLToPath(import.meta.url));
 
 import {
   initDatabase,
@@ -23,6 +28,8 @@ import {
   resumeScheduledTask,
 } from './db.js';
 import { computeNextRun } from './scheduler.js';
+import { detectPromptAgent, detectNicknameWarning } from './routing-guard.js';
+
 
 initDatabase();
 
@@ -63,6 +70,30 @@ switch (command) {
       console.error(`Invalid cron expression: "${cron}"`);
       console.error('Examples: "0 9 * * 1" (Mon 9am)  "0 8 * * *" (daily 8am)  "0 */4 * * *" (every 4h)');
       process.exit(1);
+    }
+
+    // --- Routing Guard: mismatch detection (fail-closed) ---
+    const detectedAgent = detectPromptAgent(prompt);
+    if (detectedAgent !== null && detectedAgent !== cliAgentId) {
+      console.error(
+        `ROUTING GUARD REFUSE (exit 2): prompt addresses "${detectedAgent}" but --agent resolved to "${cliAgentId}".\n` +
+        `Fix: add --agent ${detectedAgent} to your schedule-cli create call.`
+      );
+      process.exit(2);
+    }
+
+    // --- Nickname warning layer: fuzzy-match agent-adjacent tokens ---
+    const nicknameHit = detectNicknameWarning(prompt);
+    if (nicknameHit) {
+      const warnMsg = `ROUTING GUARD WARNING: prompt contains nickname "${nicknameHit.nickname}" (possible agent: ${nicknameHit.possibleAgent}). Verify --agent is correct.`;
+      console.error(warnMsg);
+      // Log to hive (best-effort, non-blocking)
+      try {
+        guardExecSync(
+          `node "${pathJoin(__guard_dirname, '..', 'dist', 'hive-cli.js')}" log "routing-guard-warning" "${warnMsg.slice(0, 120).replace(/"/g, "'")}" --agent ${cliAgentId}`,
+          { stdio: 'pipe', timeout: 5000 }
+        );
+      } catch { /* best-effort */ }
     }
 
     const id = randomBytes(4).toString('hex');

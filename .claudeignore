@@ -1,0 +1,162 @@
+# ============================================================
+# .claudeignore — files Claude skips when scanning this project
+# Keep noise out, keep signal in. Code + docs stay readable.
+# ============================================================
+
+# --- Secrets / credentials (NEVER expose) ---
+.env
+.env.*
+!.env.example
+.mcp.json
+.mcp.json.bak.*
+*.pem
+*.key
+*.crt
+.claude/*.local.*
+
+# --- Dependencies / build artifacts ---
+node_modules/
+dist/
+build/
+out/
+.next/
+.cache/
+.turbo/
+coverage/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# --- Lockfiles (huge, low signal) ---
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+uv.lock
+poetry.lock
+
+# --- Databases / runtime state ---
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+store/
+migrations/.applied.json
+
+# --- Logs / crash dumps ---
+*.log
+*.CSV
+*.PML
+.logs/
+bot-crashlog-*.log
+bot-detached-*.log
+bot-trap-*.log
+err-trace.log
+/tmp/claudeclaw.*
+
+# --- Backups ---
+*.bak
+*.bak.*
+*.orig
+*~
+
+# --- Binary / media (Claude can't read these usefully) ---
+*.png
+*.jpg
+*.jpeg
+*.webp
+*.gif
+*.ico
+*.svg
+*.wav
+*.mp3
+*.mp4
+*.mov
+*.webm
+*.pdf
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.7z
+*.rar
+*.exe
+*.dll
+*.so
+*.dylib
+
+# --- Screenshots / generated visuals ---
+screenshots/
+workspace/audits/screenshots/
+workspace/**/*.png
+workspace/**/*.jpg
+workspace/**/*.jpeg
+workspace/**/*.webp
+workspace/**/*.gif
+
+# --- One-off scripts / forensic archives (April 2026 GHL incident) ---
+ghl-*.cjs
+ghl-*.js
+gcal-*.cjs
+fix_tb_*.cjs
+yt_*.cjs
+yt_*.js
+cdp-test.cjs
+open-dashboard.cjs
+
+# --- Workspace heavy dirs (raw research, not code) ---
+workspace/borg-recon/
+workspace/youtube-research/
+workspace/creatoru-recon/
+workspace/dar-community/
+workspace/competitive-intel/
+workspace/linkedin-intel/
+workspace/signal-ingestion/
+workspace/spec-sites/
+workspace/content/
+workspace/research/
+workspace/uploads/
+workspace/tmp/
+workspace/ghl-blocks/
+workspace/annika-toolkit/
+workspace/jackson-toolkit/
+workspace/james-toolkit/
+workspace/melissa-toolkit/
+workspace/melanie-toolkit/
+workspace/sean-toolkit/
+workspace/delivery-toolkit/
+workspace/feedback-loops-toolkit/
+workspace/workspace/
+
+# --- Raw HTML dumps ---
+dar_*.html
+dar_*.txt
+dar_*.png
+workspace/*.html
+workspace/fixmybiz*.html
+entities.json
+
+# --- Temp / OS cruft ---
+tmp/
+nul
+*.tmp
+.DS_Store
+Thumbs.db
+
+# --- Editor ---
+.vscode/
+.idea/
+*.swp
+*.swo
+.wwebjs_cache/
+
+# --- Sourcemaps / minified ---
+*.map
+*.min.js
+*.min.css
+
+# --- Misc heavy artifacts ---
+banner.txt
+Logfile.CSV
+Logfile.PML

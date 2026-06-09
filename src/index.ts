@@ -8,11 +8,12 @@ import { createBot } from './bot.js';
 import { checkPendingMigrations } from './migrations.js';
 import { ALLOWED_CHAT_ID, activeBotToken, STORE_DIR, PROJECT_ROOT, CLAUDECLAW_CONFIG, GOOGLE_API_KEY, setAgentOverrides, SECURITY_PIN_HASH, IDLE_LOCK_MINUTES, EMERGENCY_KILL_PHRASE, WARROOM_ENABLED, WARROOM_PORT } from './config.js';
 import { startDashboard } from './dashboard.js';
-import { initDatabase, cleanupOldMissionTasks, insertAuditLog } from './db.js';
+import { initDatabase, cleanupOldMissionTasks, insertAuditLog, logToHiveMind } from './db.js';
 import { initSecurity, setAuditCallback } from './security.js';
 import { logger } from './logger.js';
 import { cleanupOldUploads } from './media.js';
 import { runConsolidation } from './memory-consolidate.js';
+import { initGate, setHiveLogger, getGateStatus } from './gate/index.js';
 import { flushIngestionBuffer, flushBufferOnShutdown } from './memory-ingest.js';
 import { setRateLimitFatigueCallback } from './gemini.js';
 import { runDecaySweep } from './memory.js';
@@ -198,6 +199,19 @@ async function main(): Promise<void> {
   }
 
   cleanupOldUploads();
+
+  // Decision-Surfacing Gate: initialize registry + first-week observability
+  // Go-live authorized by Jason 2026-06-04: "GO-LIVE: APPROVED. Arm the interceptor."
+  {
+    setHiveLogger((action, summary) => logToHiveMind(AGENT_ID, ALLOWED_CHAT_ID, action, summary));
+    const gateResult = initGate();
+    if (gateResult.ok) {
+      const status = getGateStatus();
+      logger.info({ registryVersion: status.registryVersion, pathCount: status.registryPathCount, firstWeek: status.firstWeekMode }, 'Decision-Surfacing Gate initialized');
+    } else {
+      logger.error({ error: gateResult.error }, 'Decision-Surfacing Gate init FAILED -- running ungated');
+    }
+  }
 
   const bot = createBot();
 
