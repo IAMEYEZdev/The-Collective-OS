@@ -6,7 +6,7 @@
   "main": "dist/index.js",
   "scripts": {
     "dev": "tsx src/index.ts",
-    "build": "tsc",
+    "build": "tsc && node -e \"const fs=require('fs'),p=require('path');const src=p.join('src','gate','governed-surface-registry.json');const dst=p.join('dist','gate','governed-surface-registry.json');fs.mkdirSync(p.dirname(dst),{recursive:true});fs.copyFileSync(src,dst);console.log('Copied',src,'->',dst);\"",
     "start": "node dist/index.js",
     "start:all": "start \"Jackson\" cmd /c \"node dist/index.js --agent custom\" && node dist/index.js",
     "typecheck": "tsc --noEmit",
