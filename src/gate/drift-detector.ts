@@ -101,10 +101,16 @@ export function getCommittedContent(absolutePath: string): Buffer | null {
 /**
  * Get file content from working tree.
  * Returns null if file does not exist.
+ * Normalizes CRLF -> LF to match git's storage format (avoids false
+ * positives on Windows where working tree has CRLF but git stores LF).
  */
 export function getWorkingContent(absolutePath: string): Buffer | null {
   try {
-    return fs.readFileSync(absolutePath);
+    const raw = fs.readFileSync(absolutePath);
+    // Normalize CRLF -> LF for text files (git stores LF)
+    const str = raw.toString('utf8');
+    const normalized = str.replace(/\r\n/g, '\n');
+    return Buffer.from(normalized, 'utf8');
   } catch {
     return null;
   }
@@ -125,8 +131,10 @@ interface RegistryData {
 /**
  * Extract all driftable entries from registry.
  * Filters: must have concrete absolute path, not a directory, not a .db file.
+ * @param registryPath - path to registry JSON
+ * @param projectRoot - override for PROJECT_ROOT (used in tests)
  */
-export function extractDriftableEntries(registryPath?: string): {
+export function extractDriftableEntries(registryPath?: string, projectRoot?: string): {
   entries: DriftEntry[];
   skipped: Array<{ id: string; reason: string }>;
 } {
@@ -181,11 +189,21 @@ export function extractDriftableEntries(registryPath?: string): {
         continue;
       }
 
+      // Skip: files outside the project repo (e.g. ~/.claude/, ~/.codex/)
+      // git show HEAD: cannot resolve paths outside PROJECT_ROOT.
+      // These are user-home config, not project-governed via git.
+      const effectiveRoot = projectRoot || PROJECT_ROOT;
+      const relToProject = path.relative(effectiveRoot, absolute);
+      if (relToProject.startsWith('..') || path.isAbsolute(relToProject)) {
+        skipped.push({ id, reason: `Outside project repo (${absolute.slice(0, 60)}...)` });
+        continue;
+      }
+
       // Skip: structurally unbaselineable files (.gitignored, never committed)
       // These can NEVER have a git baseline -- checking them always yields
       // NOT_IN_GIT, which is permanent structural fact, not drift.
       // Covers: .env, settings.local.json, similar gitignored configs.
-      const gitignoredPermanentSkips = ['.env', 'settings.local.json'];
+      const gitignoredPermanentSkips = ['.env', 'settings.local.json', '.mcp.json'];
       const basename = path.basename(absolute);
       if (gitignoredPermanentSkips.includes(basename)) {
         skipped.push({ id, reason: `Gitignored file (${basename}), structurally unbaselineable` });
@@ -422,6 +440,7 @@ export interface DetectOptions {
   allowlistPath?: string;
   dbPath?: string;
   artifactsDir?: string;
+  projectRoot?: string;
 }
 
 /**
@@ -435,7 +454,7 @@ export interface DetectOptions {
  * 5. Produce report
  */
 export function runDriftScan(options: DetectOptions = {}): DriftReport {
-  const { entries, skipped } = extractDriftableEntries(options.registryPath);
+  const { entries, skipped } = extractDriftableEntries(options.registryPath, options.projectRoot);
 
   // F3: path resolution self-test
   const pathFailures = selfTestPathResolution(entries);

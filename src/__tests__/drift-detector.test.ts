@@ -72,7 +72,7 @@ describe('extractDriftableEntries', () => {
       { id: 'GOV-001', policy: 'GATE', absolute: govFile, scope: 'test' },
     ]);
 
-    const { entries, skipped } = extractDriftableEntries(regPath);
+    const { entries, skipped } = extractDriftableEntries(regPath, testDir);
     expect(entries.length).toBeGreaterThanOrEqual(1);
     const gov = entries.find(e => e.id === 'GOV-001');
     expect(gov).toBeDefined();
@@ -84,7 +84,7 @@ describe('extractDriftableEntries', () => {
       { id: 'DIR-001', policy: 'GATE', absolute: testDir, scope: 'test', type: 'directory' },
     ]);
 
-    const { entries, skipped } = extractDriftableEntries(regPath);
+    const { entries, skipped } = extractDriftableEntries(regPath, testDir);
     const dirEntry = entries.find(e => e.id === 'DIR-001');
     expect(dirEntry).toBeUndefined();
     expect(skipped.some(s => s.id === 'DIR-001' && s.reason.includes('Directory'))).toBe(true);
@@ -98,7 +98,7 @@ describe('extractDriftableEntries', () => {
       { id: 'DB-001', policy: 'GATE', absolute: dbFile, scope: 'test' },
     ]);
 
-    const { entries, skipped } = extractDriftableEntries(regPath);
+    const { entries, skipped } = extractDriftableEntries(regPath, testDir);
     expect(entries.find(e => e.id === 'DB-001')).toBeUndefined();
     expect(skipped.some(s => s.id === 'DB-001' && s.reason.includes('.db'))).toBe(true);
   });
@@ -108,7 +108,7 @@ describe('extractDriftableEntries', () => {
       { id: 'PAT-001', policy: 'GATE', path_pattern: 'src/**/*.ts', scope: 'test' },
     ]);
 
-    const { skipped } = extractDriftableEntries(regPath);
+    const { skipped } = extractDriftableEntries(regPath, testDir);
     expect(skipped.some(s => s.id === 'PAT-001' && s.reason.includes('Pattern'))).toBe(true);
   });
 });
@@ -325,6 +325,7 @@ describe('runDriftScan', () => {
       allowlistPath: path.join(testDir, 'no-allowlist.json'),
       dbPath: path.join(testDir, 'no.db'),
       artifactsDir: artDir,
+      projectRoot: testDir,
     });
 
     expect(report.timestamp).toBeTruthy();
