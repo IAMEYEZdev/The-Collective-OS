@@ -1,6 +1,7 @@
 import { GoogleGenAI } from '@google/genai';
 
-import { GOOGLE_API_KEY, GOOGLE_API_KEY_SECONDARY } from './config.js';
+import { GOOGLE_API_KEY, GOOGLE_API_KEY_SECONDARY, MEMORY_PROVIDER } from './config.js';
+import { ollamaGenerateContent } from './local-llm.js';
 import { logger } from './logger.js';
 
 // ── Dual-client management ─────────────────────────────────────────
@@ -45,14 +46,110 @@ let consecutiveDoubleRateLimits = 0;
 
 // Rate-limit fatigue tracking: escalate to user after sustained failures
 const FATIGUE_WINDOW_MS = 10 * 60_000; // 10 minutes
-const FATIGUE_THRESHOLD = 10; // 10 consecutive 429s in 10 min = fatigue
+const FATIGUE_THRESHOLD = 10; // 10 failures (429/503/timeout/network) in 10 min = fatigue
 const rateLimitHits: number[] = [];
 let fatigueCallbackFired = false;
 
+// ── Failure classification ──────────────────────────────────────────
+// 429 alone is not enough: a 403 PERMISSION_DENIED killed the memory
+// layer silently for ~4h on 2026-06-10 because nothing counted it.
+
+export type GeminiFailureKind = 'auth' | 'capacity' | 'rate-limit' | 'other';
+export interface MemoryOfflineEvent {
+  kind: 'auth' | 'fatigue';
+  detail: string;
+}
+
 // Callback for notifying when memory layer is effectively offline
-let onRateLimitFatigue: (() => void) | null = null;
-export function setRateLimitFatigueCallback(cb: () => void): void {
+let onRateLimitFatigue: ((event: MemoryOfflineEvent) => void) | null = null;
+export function setRateLimitFatigueCallback(cb: (event: MemoryOfflineEvent) => void): void {
   onRateLimitFatigue = cb;
+}
+
+function fireOfflineCallback(event: MemoryOfflineEvent): void {
+  if (onRateLimitFatigue) {
+    try { onRateLimitFatigue(event); } catch { /* non-fatal */ }
+  }
+}
+
+export function classifyGeminiError(err: unknown): GeminiFailureKind {
+  const errAny = err as { status?: number; code?: number; message?: string };
+  const status = errAny?.status ?? errAny?.code;
+  const msg = errAny?.message ?? '';
+
+  if (status === 429 || msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED')) return 'rate-limit';
+  if (
+    status === 403 || status === 401 ||
+    msg.includes('PERMISSION_DENIED') || msg.includes('UNAUTHENTICATED') ||
+    msg.includes('API_KEY_INVALID') || /\b40[13]\b/.test(msg)
+  ) {
+    return 'auth';
+  }
+  if (status === 503 || msg.includes('503') || msg.includes('UNAVAILABLE') || msg.toLowerCase().includes('overloaded')) {
+    return 'capacity';
+  }
+  if (
+    /ETIMEDOUT|ECONNREFUSED|ECONNRESET|ENOTFOUND|EAI_AGAIN/.test(msg) ||
+    msg.toLowerCase().includes('timeout') || msg.toLowerCase().includes('timed out') ||
+    msg.includes('fetch failed') || (err as { name?: string })?.name === 'AbortError'
+  ) {
+    return 'capacity'; // timeouts/network count toward fatigue like 503
+  }
+  return 'other';
+}
+
+// Auth failure latch: fires the offline callback IMMEDIATELY (no threshold)
+// and does not heal with a cooldown. Only a subsequent successful call
+// (i.e. the key was actually fixed) re-arms the alert.
+let authFailureLatched = false;
+
+function recordAuthFailure(err: unknown): void {
+  if (authFailureLatched) return;
+  authFailureLatched = true;
+  const detail = (err as { message?: string })?.message?.slice(0, 200) ?? 'unknown auth error';
+  logger.error({ detail }, 'Gemini auth failure (403/401): memory layer offline until key is fixed');
+  fireOfflineCallback({ kind: 'auth', detail });
+}
+
+function recordSuccess(): void {
+  if (authFailureLatched) {
+    authFailureLatched = false;
+    logger.info('Gemini auth recovered: alert re-armed');
+  }
+}
+
+// Capacity failures (503, timeout, network) count toward the same fatigue
+// window as 429s. Sustained failure of any kind = memory layer offline.
+function trackFatigue(source: string): void {
+  const now = Date.now();
+  rateLimitHits.push(now);
+  while (rateLimitHits.length > 0 && rateLimitHits[0]! < now - FATIGUE_WINDOW_MS) {
+    rateLimitHits.shift();
+  }
+  if (rateLimitHits.length >= FATIGUE_THRESHOLD && !fatigueCallbackFired) {
+    fatigueCallbackFired = true;
+    logger.error(
+      { hitsInWindow: rateLimitHits.length, source },
+      'Gemini failure fatigue: memory layer effectively offline',
+    );
+    fireOfflineCallback({
+      kind: 'fatigue',
+      detail: `${rateLimitHits.length} failures (429/503/timeout) in 10 min, latest: ${source}`,
+    });
+    // Reset after firing so it can fire again if it persists
+    setTimeout(() => { fatigueCallbackFired = false; }, FATIGUE_WINDOW_MS);
+  }
+}
+
+/**
+ * Classify and track a Gemini call failure. Auth errors alert immediately;
+ * capacity/timeout/network errors count toward the fatigue threshold.
+ */
+function recordFailure(err: unknown): GeminiFailureKind {
+  const kind = classifyGeminiError(err);
+  if (kind === 'auth') recordAuthFailure(err);
+  else if (kind === 'capacity') trackFatigue((err as { message?: string })?.message?.slice(0, 80) ?? 'capacity');
+  return kind;
 }
 
 function isKeyRateLimited(key: 'primary' | 'secondary'): boolean {
@@ -68,26 +165,7 @@ function markKeyRateLimited(key: 'primary' | 'secondary'): void {
     secondaryBackoffUntil = Date.now() + cooldownMs;
   }
   logger.warn({ key }, 'Gemini 429 rate limit hit, key cooling off for 60s');
-
-  // Track fatigue
-  const now = Date.now();
-  rateLimitHits.push(now);
-  // Prune old entries
-  while (rateLimitHits.length > 0 && rateLimitHits[0]! < now - FATIGUE_WINDOW_MS) {
-    rateLimitHits.shift();
-  }
-  if (rateLimitHits.length >= FATIGUE_THRESHOLD && !fatigueCallbackFired) {
-    fatigueCallbackFired = true;
-    logger.error(
-      { hitsInWindow: rateLimitHits.length },
-      'Gemini rate-limit fatigue: memory layer effectively offline',
-    );
-    if (onRateLimitFatigue) {
-      try { onRateLimitFatigue(); } catch { /* non-fatal */ }
-    }
-    // Reset after firing so it can fire again if it persists
-    setTimeout(() => { fatigueCallbackFired = false; }, FATIGUE_WINDOW_MS);
-  }
+  trackFatigue('429 rate limit');
 }
 
 function isRateLimited(): boolean {
@@ -156,6 +234,20 @@ export async function generateContent(
   model = 'gemini-2.5-flash',
   priority: 'normal' | 'high' = 'normal',
 ): Promise<string> {
+  // Local provider: no Gemini client, no quota rate limiter. Failures
+  // still feed the offline-alert tracking (network errors count as capacity).
+  if (MEMORY_PROVIDER === 'local') {
+    try {
+      const text = await ollamaGenerateContent(prompt);
+      recordSuccess();
+      return text;
+    } catch (err) {
+      const kind = recordFailure(err);
+      logger.error({ err, provider: 'local', kind }, 'Local LLM generateContent failed');
+      throw err;
+    }
+  }
+
   // Rate limit non-critical calls (memory ingestion, consolidation)
   // to preserve quota for high-priority calls (War Room, user-facing)
   if (priority === 'normal' && isRateLimited()) {
@@ -171,10 +263,13 @@ export async function generateContent(
 
   try {
     recordRequest();
-    return await callGemini(firstClient, prompt, model);
+    const text = await callGemini(firstClient, prompt, model);
+    recordSuccess();
+    return text;
   } catch (err) {
     if (!is429(err)) {
-      logger.error({ err, model, key: firstKey }, 'Gemini generateContent failed');
+      const kind = recordFailure(err);
+      logger.error({ err, model, key: firstKey, kind }, 'Gemini generateContent failed');
       throw err;
     }
 
@@ -187,13 +282,16 @@ export async function generateContent(
     if (fallbackClient && !isKeyRateLimited(fallbackKey)) {
       try {
         logger.info({ fallbackKey }, 'Primary Gemini key rate-limited, trying secondary');
-        return await callGemini(fallbackClient, prompt, model);
+        const text = await callGemini(fallbackClient, prompt, model);
+        recordSuccess();
+        return text;
       } catch (fallbackErr) {
         if (is429(fallbackErr)) {
           markKeyRateLimited(fallbackKey);
           // Both keys are rate-limited
         } else {
-          logger.error({ err: fallbackErr, model, key: fallbackKey }, 'Gemini fallback key failed (non-429)');
+          const kind = recordFailure(fallbackErr);
+          logger.error({ err: fallbackErr, model, key: fallbackKey, kind }, 'Gemini fallback key failed (non-429)');
           throw fallbackErr;
         }
       }
@@ -218,10 +316,14 @@ export async function generateContent(
     await new Promise((resolve) => setTimeout(resolve, jitter));
 
     try {
-      return await callGemini(getPrimaryClient(), prompt, model);
+      const text = await callGemini(getPrimaryClient(), prompt, model);
+      recordSuccess();
+      return text;
     } catch (retryErr) {
       if (is429(retryErr)) {
         markKeyRateLimited('primary');
+      } else {
+        recordFailure(retryErr);
       }
       logger.error({ err: retryErr, model }, 'Gemini backoff retry failed');
       throw retryErr;

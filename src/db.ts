@@ -3,7 +3,7 @@ import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 
-import { DB_ENCRYPTION_KEY, STORE_DIR } from './config.js';
+import { ACTIVE_EMBEDDING_MODEL, DB_ENCRYPTION_KEY, STORE_DIR } from './config.js';
 import { bridgeHiveLog, bridgeMemory, bridgeMissionTask, bridgeBoardAudit } from './cognee-bridge.js';
 import { cosineSimilarity } from './embeddings.js';
 import { logger } from './logger.js';
@@ -889,7 +889,8 @@ export function searchMemories(
 }
 
 export function saveMemoryEmbedding(memoryId: number, embedding: number[]): void {
-  db.prepare('UPDATE memories SET embedding = ? WHERE id = ?').run(JSON.stringify(embedding), memoryId);
+  db.prepare('UPDATE memories SET embedding = ?, embedding_model = ? WHERE id = ?')
+    .run(JSON.stringify(embedding), ACTIVE_EMBEDDING_MODEL, memoryId);
 }
 
 /**
@@ -919,8 +920,8 @@ export function saveStructuredMemoryAtomic(
 
 export function getMemoriesWithEmbeddings(chatId: string): Array<{ id: number; embedding: number[]; summary: string; importance: number }> {
   const rows = db
-    .prepare('SELECT id, embedding, summary, importance FROM memories WHERE chat_id = ? AND embedding IS NOT NULL AND superseded_by IS NULL')
-    .all(chatId) as Array<{ id: number; embedding: string; summary: string; importance: number }>;
+    .prepare('SELECT id, embedding, summary, importance FROM memories WHERE chat_id = ? AND embedding IS NOT NULL AND superseded_by IS NULL AND embedding_model = ?')
+    .all(chatId, ACTIVE_EMBEDDING_MODEL) as Array<{ id: number; embedding: string; summary: string; importance: number }>;
   return rows.map((r) => ({
     id: r.id,
     embedding: JSON.parse(r.embedding) as number[],
@@ -1041,13 +1042,13 @@ export function saveConsolidation(
 
 export function saveConsolidationEmbedding(consolidationId: number, embedding: number[]): void {
   db.prepare('UPDATE consolidations SET embedding = ?, embedding_model = ? WHERE id = ?')
-    .run(JSON.stringify(embedding), 'embedding-001', consolidationId);
+    .run(JSON.stringify(embedding), ACTIVE_EMBEDDING_MODEL, consolidationId);
 }
 
 export function getConsolidationsWithEmbeddings(chatId: string): Array<{ id: number; embedding: number[]; summary: string; insight: string }> {
   const rows = db
     .prepare('SELECT id, embedding, summary, insight FROM consolidations WHERE chat_id = ? AND embedding IS NOT NULL AND embedding_model = ?')
-    .all(chatId, 'embedding-001') as Array<{ id: number; embedding: string; summary: string; insight: string }>;
+    .all(chatId, ACTIVE_EMBEDDING_MODEL) as Array<{ id: number; embedding: string; summary: string; insight: string }>;
   return rows.map((r) => ({ ...r, embedding: JSON.parse(r.embedding) as number[] }));
 }
 

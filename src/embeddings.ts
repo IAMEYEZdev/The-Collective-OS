@@ -1,6 +1,7 @@
 import { GoogleGenAI } from '@google/genai';
 
-import { GOOGLE_API_KEY } from './config.js';
+import { GOOGLE_API_KEY, MEMORY_PROVIDER } from './config.js';
+import { ollamaEmbedText } from './local-llm.js';
 import { logger } from './logger.js';
 
 const EMBEDDING_MODEL = 'gemini-embedding-001';
@@ -21,6 +22,9 @@ function getClient(): GoogleGenAI {
  * Returns a float array (768 dimensions for text-embedding-004).
  */
 export async function embedText(text: string): Promise<number[]> {
+  if (MEMORY_PROVIDER === 'local') {
+    return ollamaEmbedText(text);
+  }
   const ai = getClient();
   const result = await ai.models.embedContent({
     model: EMBEDDING_MODEL,

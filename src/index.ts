@@ -6,7 +6,7 @@ import path from 'path';
 import { loadAgentConfig, listAgentIds, resolveAgentDir, resolveAgentClaudeMd } from './agent-config.js';
 import { createBot } from './bot.js';
 import { checkPendingMigrations } from './migrations.js';
-import { ALLOWED_CHAT_ID, activeBotToken, STORE_DIR, PROJECT_ROOT, CLAUDECLAW_CONFIG, GOOGLE_API_KEY, setAgentOverrides, SECURITY_PIN_HASH, IDLE_LOCK_MINUTES, EMERGENCY_KILL_PHRASE, WARROOM_ENABLED, WARROOM_PORT } from './config.js';
+import { ALLOWED_CHAT_ID, activeBotToken, STORE_DIR, PROJECT_ROOT, CLAUDECLAW_CONFIG, GOOGLE_API_KEY, MEMORY_PROVIDER, setAgentOverrides, SECURITY_PIN_HASH, IDLE_LOCK_MINUTES, EMERGENCY_KILL_PHRASE, WARROOM_ENABLED, WARROOM_PORT } from './config.js';
 import { startDashboard } from './dashboard.js';
 import { initDatabase, cleanupOldMissionTasks, insertAuditLog, logToHiveMind } from './db.js';
 import { initSecurity, setAuditCallback } from './security.js';
@@ -16,7 +16,9 @@ import { runConsolidation } from './memory-consolidate.js';
 import { initGate, setHiveLogger, getGateStatus } from './gate/index.js';
 import { flushIngestionBuffer, flushBufferOnShutdown } from './memory-ingest.js';
 import { setRateLimitFatigueCallback } from './gemini.js';
+import { checkOllamaHealth } from './local-llm.js';
 import { runDecaySweep } from './memory.js';
+import { initHealthStatus } from './health-status.js';
 import { initOAuthHealthCheck } from './oauth-health.js';
 import { initOrchestrator } from './orchestrator.js';
 import { initScheduler } from './scheduler.js';
@@ -161,13 +163,31 @@ async function main(): Promise<void> {
 
   initOrchestrator();
 
-  // Wire up rate-limit fatigue callback (B.1): notify Jason when memory layer is offline
+  // Wire up memory-offline callback: notify Jason when the memory layer fails.
+  // Auth errors (403/401) alert immediately; sustained 429/503/timeout alerts on fatigue.
   if (ALLOWED_CHAT_ID) {
-    setRateLimitFatigueCallback(() => {
-      bot.api.sendMessage(
-        ALLOWED_CHAT_ID,
-        '⚠️ Gemini rate limits have been hit repeatedly. Memory ingestion, consolidation, and relevance evaluation are effectively offline. Consider upgrading the Gemini API tier or reducing call frequency.',
-      ).catch((err) => logger.error({ err }, 'Failed to send rate-limit fatigue alert'));
+    setRateLimitFatigueCallback((event) => {
+      const message = event.kind === 'auth'
+        ? `🚨 Gemini auth failure (403/401). Memory ingestion, consolidation, and relevance evaluation are OFFLINE now and will stay offline until the API key is fixed. Detail: ${event.detail}`
+        : `⚠️ Gemini failures sustained (429/503/timeouts). Memory layer effectively offline. Detail: ${event.detail}`;
+      bot.api.sendMessage(ALLOWED_CHAT_ID, message)
+        .catch((err) => logger.error({ err }, 'Failed to send memory-offline alert'));
+    });
+  }
+
+  // MEMORY_PROVIDER=local startup health check: no silent fallthrough.
+  // If Ollama is down or missing models, ERROR-log and alert the Captain.
+  if (MEMORY_PROVIDER === 'local') {
+    void checkOllamaHealth().then(({ ok, detail }) => {
+      if (ok) {
+        logger.info({ detail }, 'Memory provider: local (Ollama)');
+        return;
+      }
+      logger.error({ detail }, 'MEMORY_PROVIDER=local but Ollama health check failed: memory layer offline');
+      if (ALLOWED_CHAT_ID) {
+        bot.api.sendMessage(ALLOWED_CHAT_ID, `🚨 MEMORY_PROVIDER=local but Ollama health check failed. Memory layer is OFFLINE. ${detail}`)
+          .catch((err) => logger.error({ err }, 'Failed to send Ollama health alert'));
+      }
     });
   }
 
@@ -361,6 +381,19 @@ async function main(): Promise<void> {
       },
       AGENT_ID,
     );
+
+    // Daily off-chat-path test suite (05:30) + 06:00 Telegram status report.
+    // Main process only: agents must never run vitest inside a chat turn.
+    if (AGENT_ID === 'main') {
+      initHealthStatus(async (text) => {
+        const { splitMessage } = await import('./bot.js');
+        for (const chunk of splitMessage(text)) {
+          await bot.api.sendMessage(ALLOWED_CHAT_ID, chunk).catch((err) =>
+            logger.error({ err }, 'Health status report send failed'),
+          );
+        }
+      });
+    }
 
     // Proactive OAuth health monitoring — alerts via Telegram before the
     // Claude CLI token expires. OPT-IN as of 2026-04-10: users were getting

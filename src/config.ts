@@ -183,6 +183,26 @@ export const GOOGLE_API_KEY =
 export const GOOGLE_API_KEY_SECONDARY =
   process.env.GEMINI_API_KEY_SECONDARY || readEnvFile(['GEMINI_API_KEY_SECONDARY']).GEMINI_API_KEY_SECONDARY || '';
 
+// ── Memory provider selection (MEM-SHIM-01 Workstream B) ────────────
+// MEMORY_PROVIDER=local routes memory-layer LLM + embedding calls to
+// Ollama. Default gemini; flipping the env var back is the rollback.
+const rawMemoryProvider =
+  (process.env.MEMORY_PROVIDER || readEnvFile(['MEMORY_PROVIDER']).MEMORY_PROVIDER || 'gemini').toLowerCase();
+export const MEMORY_PROVIDER: 'gemini' | 'local' = rawMemoryProvider === 'local' ? 'local' : 'gemini';
+
+export const OLLAMA_BASE_URL =
+  process.env.OLLAMA_BASE_URL || readEnvFile(['OLLAMA_BASE_URL']).OLLAMA_BASE_URL || 'http://localhost:11434';
+// LOCAL_CHAT_MODEL env override allows the llama3.1:8b fallback without a code change.
+export const LOCAL_CHAT_MODEL =
+  process.env.LOCAL_CHAT_MODEL || readEnvFile(['LOCAL_CHAT_MODEL']).LOCAL_CHAT_MODEL || 'qwen2.5:3b';
+export const LOCAL_EMBED_MODEL = 'nomic-embed-text';
+
+// Embedding-space version tag written to and filtered on the DB
+// embedding_model column. Vectors from different models must NEVER be
+// compared. 'embedding-001' is the historical tag already on existing
+// Gemini rows (the API model is gemini-embedding-001; the tag predates it).
+export const ACTIVE_EMBEDDING_MODEL = MEMORY_PROVIDER === 'local' ? LOCAL_EMBED_MODEL : 'embedding-001';
+
 // Streaming strategy for progressive Telegram updates.
 // 'global-throttle' (default): edits a placeholder message with streamed text,
 //   rate-limited to ~24 edits/min per chat to respect Telegram limits.
