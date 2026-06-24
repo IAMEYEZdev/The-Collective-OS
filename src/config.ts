@@ -6,6 +6,7 @@ import { readEnvFile } from './env.js';
 
 const envConfig = readEnvFile([
   'TELEGRAM_BOT_TOKEN',
+  'NEO_BOT_TOKEN',
   'ALLOWED_CHAT_ID',
   'GROQ_API_KEY',
   'ELEVENLABS_API_KEY',
@@ -71,6 +72,9 @@ export function setAgentOverrides(opts: {
 
 export const TELEGRAM_BOT_TOKEN =
   process.env.TELEGRAM_BOT_TOKEN || envConfig.TELEGRAM_BOT_TOKEN || '';
+
+export const NEO_BOT_TOKEN =
+  process.env.NEO_BOT_TOKEN || envConfig.NEO_BOT_TOKEN || '';
 
 // Only respond to this Telegram chat ID. Set this after getting your ID via /chatid.
 export const ALLOWED_CHAT_ID =
@@ -276,7 +280,7 @@ export const EXFILTRATION_GUARD_ENABLED =
   (process.env.EXFILTRATION_GUARD_ENABLED || envConfig.EXFILTRATION_GUARD_ENABLED || 'true').toLowerCase() === 'true';
 export const PROTECTED_ENV_VARS = (
   process.env.PROTECTED_ENV_VARS || envConfig.PROTECTED_ENV_VARS ||
-  'ANTHROPIC_API_KEY,CLAUDE_CODE_OAUTH_TOKEN,DB_ENCRYPTION_KEY,TELEGRAM_BOT_TOKEN,SLACK_USER_TOKEN,GROQ_API_KEY,ELEVENLABS_API_KEY,GOOGLE_API_KEY'
+  'ANTHROPIC_API_KEY,CLAUDE_CODE_OAUTH_TOKEN,DB_ENCRYPTION_KEY,TELEGRAM_BOT_TOKEN,NEO_BOT_TOKEN,SLACK_USER_TOKEN,GROQ_API_KEY,ELEVENLABS_API_KEY,GOOGLE_API_KEY'
 ).split(',').map((s) => s.trim()).filter(Boolean);
 
 // ── War Room (voice meeting via Pipecat WebSocket) ──────────────────
