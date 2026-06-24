@@ -5,6 +5,9 @@ import path from 'path';
 
 import { loadAgentConfig, listAgentIds, resolveAgentDir, resolveAgentClaudeMd } from './agent-config.js';
 import { createBot } from './bot.js';
+import { createNeoBot } from './neo-bot.js';
+import { startNeoReplyPump } from './neo-reply-pump.js';
+import { startNeoDispatchRunner } from './neo-dispatch-runner.js';
 import { checkPendingMigrations } from './migrations.js';
 import { ALLOWED_CHAT_ID, activeBotToken, STORE_DIR, PROJECT_ROOT, CLAUDECLAW_CONFIG, GOOGLE_API_KEY, MEMORY_PROVIDER, setAgentOverrides, SECURITY_PIN_HASH, IDLE_LOCK_MINUTES, EMERGENCY_KILL_PHRASE, WARROOM_ENABLED, WARROOM_PORT } from './config.js';
 import { startDashboard } from './dashboard.js';
@@ -235,6 +238,25 @@ async function main(): Promise<void> {
 
   const bot = createBot();
 
+  // Dedicated Neo bot (async bridge). Independent of the main bot; a failure
+  // here must never disable the main bot. Only starts if NEO_BOT_TOKEN is set.
+  let neoBot = null;
+  try {
+    neoBot = createNeoBot();
+    if (neoBot) {
+      neoBot.start({ onStart: (info) => logger.info({ username: info.username }, 'Neo bot online') }).catch((err) => {
+        logger.error({ err }, 'Neo bot failed to start (main bot unaffected)');
+      });
+      // Pump that delivers Neo's replies (written by neo-poll) back to Telegram.
+      startNeoReplyPump(neoBot);
+      // Consume telegram-originated envelopes: fire neo-dispatch.mjs in the
+      // background so Neo actually runs (the bot only writes the envelope).
+      startNeoDispatchRunner();
+    }
+  } catch (err) {
+    logger.error({ err }, 'Neo bot init failed (main bot unaffected)');
+  }
+
   // Dashboard only runs in the main bot process
   if (AGENT_ID === 'main') {
     startDashboard(bot.api);
@@ -426,6 +448,7 @@ async function main(): Promise<void> {
     setTelegramConnected(false);
     releaseLock();
     await bot.stop();
+    if (neoBot) { try { await neoBot.stop(); } catch { /* ignore */ } }
     process.exit(0);
   };
   process.on('SIGINT', () => void shutdown());

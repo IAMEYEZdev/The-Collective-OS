@@ -27,6 +27,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.resolve(__dirname, '..');
 const INBOUND_DIR = path.join(PROJECT_ROOT, 'workspace', 'dispatch', 'inbound');
 const OUTBOUND_DIR = path.join(PROJECT_ROOT, 'workspace', 'dispatch', 'outbound');
+const REPLIES_DIR = path.join(PROJECT_ROOT, 'workspace', 'dispatch', 'replies');
 const PROCESSED_MARKER = '.ingested';
 const STALL_CAP_MS = 5 * 60 * 1000; // 5 minutes max for partial results
 
@@ -245,9 +246,11 @@ async function pollCycle() {
         markProcessed(resultPath);
         continue;
       }
-      // Same content, not yet stalled -- skip silently (already ingested)
+      // Same content, not yet stalled. Only retire a TERMINAL unchanged result.
+      // A still-partial file is left unmarked so a later tick re-reads it once
+      // Codex updates it to success/failed (the reply is emitted then).
       console.log(`[neo-poll] SKIP: ${result.ulid} unchanged since last ingest`);
-      markProcessed(resultPath);
+      if (result.status !== 'partial') markProcessed(resultPath);
       continue;
     }
 
@@ -314,6 +317,13 @@ async function pollCycle() {
       );
     } catch { /* best-effort */ }
 
+    // 6b. Telegram reply: if this dispatch came from the Neo bot, queue a reply.
+    try {
+      emitTelegramReply(result, dispatchEnvelope);
+    } catch (err) {
+      console.error('[neo-poll] Telegram reply emit failed (non-fatal):', err.message);
+    }
+
     // 7. Status-specific actions — clear stall tracker on terminal status
     if (result.status !== 'partial') {
       partialFirstSeen.delete(result.ulid);
@@ -335,11 +345,58 @@ async function pollCycle() {
       console.log(`[neo-poll] Metrics: ${m.rounds} rounds, converged=${m.converged}, ${m.wallTimeMs}ms wall`);
     }
 
-    markProcessed(resultPath);
+    // Retire only terminal results. A 'partial' stays unmarked so the next tick
+    // re-reads the file after Codex finalises it, and the Telegram reply fires.
+    if (result.status !== 'partial') markProcessed(resultPath);
     processed++;
   }
 
   return processed;
+}
+
+function emitTelegramReply(result, dispatchEnvelope) {
+  // Only emit a reply when this dispatch originated from the Neo Telegram bot.
+  const chatId = dispatchEnvelope && dispatchEnvelope.callback
+    && dispatchEnvelope.callback.telegram
+    && dispatchEnvelope.callback.telegram.chatId;
+  if (!chatId) return; // not a Telegram-originated dispatch; nothing to do.
+
+  // Deliver only terminal results. Neo emits 'partial' repeatedly while it
+  // works; forwarding those floods the Telegram chat. Wait for the final
+  // status (completed / failed / blocked). 'partial' is suppressed.
+  if (result.status === 'partial') return;
+
+  if (!fs.existsSync(REPLIES_DIR)) fs.mkdirSync(REPLIES_DIR, { recursive: true });
+
+  const replyPath = path.join(REPLIES_DIR, result.ulid + '.reply.json');
+  // Idempotent: if we already wrote a reply for this ULID, don't overwrite.
+  if (fs.existsSync(replyPath)) return;
+
+  // Build a readable reply from the result.
+  const lines = [];
+  lines.push('Neo (' + (result.status || 'done') + '): ' + (result.summary || '(no summary)'));
+  if (Array.isArray(result.openQuestions) && result.openQuestions.length) {
+    lines.push('');
+    lines.push('Open questions:');
+    result.openQuestions.forEach((q, i) => lines.push((i + 1) + '. ' + q));
+  }
+  if (result.reverseBrief) {
+    lines.push('');
+    lines.push('Note: ' + result.reverseBrief);
+  }
+
+  const record = {
+    ulid: result.ulid,
+    chatId: String(chatId),
+    text: lines.join('\n'),
+    status: result.status,
+    createdAt: new Date().toISOString(),
+  };
+
+  const tmp = replyPath + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(record, null, 2));
+  fs.renameSync(tmp, replyPath);
+  console.log('[neo-poll] Telegram reply queued for chat ' + chatId + ' (ULID ' + result.ulid + ')');
 }
 
 function markProcessed(resultPath) {
