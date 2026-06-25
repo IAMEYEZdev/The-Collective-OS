@@ -242,7 +242,10 @@ async function main(): Promise<void> {
   // here must never disable the main bot. Only starts if NEO_BOT_TOKEN is set.
   let neoBot = null;
   try {
-    neoBot = createNeoBot();
+    // Neo bot runs in the MAIN orchestrator process only. Sub-agents (--agent)
+    // share NEO_BOT_TOKEN and would lose the Telegram 409 getUpdates conflict,
+    // so they must not start it.
+    neoBot = AGENT_ID === 'main' ? createNeoBot() : null;
     if (neoBot) {
       neoBot.start({ onStart: (info) => logger.info({ username: info.username }, 'Neo bot online') }).catch((err) => {
         logger.error({ err }, 'Neo bot failed to start (main bot unaffected)');
