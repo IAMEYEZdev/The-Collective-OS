@@ -2,7 +2,7 @@
  * Context Collector — ClaudeClaw Collective
  *
  * Session-scoped context accumulator. Agents register context entries
- * which get priority-sorted and merged for prompt injection.
+ * which get sorted newest-first and merged for prompt injection.
  *
  * Key semantics:
  * - register() upserts by source:id composite key
@@ -12,12 +12,18 @@
 
 import type {
   ContextEntry,
-  ContextPriority,
   PendingContext,
   RegisterContextOptions,
   ContextSourceType,
 } from './types.js';
-import { PRIORITY_ORDER } from './types.js';
+
+/** Tunable cap for per-turn injected context, estimated at 4 chars/token. */
+export const CONTEXT_INJECT_TOKEN_BUDGET = parseInt(
+  process.env.CONTEXT_INJECT_TOKEN_BUDGET || '1500',
+  10,
+);
+
+const CONTEXT_INJECT_CHAR_BUDGET = Math.max(0, CONTEXT_INJECT_TOKEN_BUDGET * 4);
 
 export class ContextCollector {
   /** Map<sessionId, Map<"source:id", ContextEntry>> */
@@ -51,7 +57,7 @@ export class ContextCollector {
       return { merged: '', entries: [], hasContent: false };
     }
 
-    const entries = this.sortEntries(Array.from(session.values()));
+    const entries = this.capEntries(this.sortEntries(Array.from(session.values())));
     const merged = entries.map(e => e.content).join('\n\n');
 
     return { merged, entries, hasContent: true };
@@ -93,13 +99,37 @@ export class ContextCollector {
     return Array.from(this.sessions.keys());
   }
 
-  /** Sort entries: critical > high > normal > low, then by timestamp ascending */
+  /** Sort entries newest first so capped context preserves recent activity. */
   private sortEntries(entries: ContextEntry[]): ContextEntry[] {
-    return entries.sort((a, b) => {
-      const priorityDiff = PRIORITY_ORDER[a.priority] - PRIORITY_ORDER[b.priority];
-      if (priorityDiff !== 0) return priorityDiff;
-      return a.timestamp - b.timestamp;
-    });
+    return entries.sort((a, b) => b.timestamp - a.timestamp);
+  }
+
+  /** Keep newest entries within the injected-context budget. */
+  private capEntries(entries: ContextEntry[]): ContextEntry[] {
+    if (CONTEXT_INJECT_CHAR_BUDGET === 0) return [];
+
+    const capped: ContextEntry[] = [];
+    let used = 0;
+
+    for (const entry of entries) {
+      const separatorLength = capped.length > 0 ? 2 : 0;
+      const remaining = CONTEXT_INJECT_CHAR_BUDGET - used - separatorLength;
+      if (remaining <= 0) break;
+
+      if (entry.content.length <= remaining) {
+        capped.push(entry);
+        used += separatorLength + entry.content.length;
+        continue;
+      }
+
+      capped.push({
+        ...entry,
+        content: entry.content.slice(0, remaining),
+      });
+      break;
+    }
+
+    return capped;
   }
 }
 
