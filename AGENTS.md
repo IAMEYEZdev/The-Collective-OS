@@ -134,6 +134,24 @@ All engineering work follows exactly three prompts per feature unit. No freeform
 | Reliability/Ops | Performance, monitoring, deployment safety | Pre-deploy review |
 | Data Engineer | Schema design, migration scripts, data integrity | Data-touching unit review |
 
+### Mission Supervision Protocol
+
+Every dispatched mission is monitored by `neo-mission-watchdog.mjs`. Neo MUST follow these rules:
+
+**Heartbeat rule:** Log to hive at least once every 10 minutes during active work. Use any action tag. Silence > 10 minutes triggers stall detection. Two consecutive silent polls = mission cancelled + escalation to Melanie.
+
+**Terminal state rule:** When a mission ends, log one of these exact hive entries:
+- `MISSION_COMPLETE` -- task finished successfully. Include mission ID in message.
+- `MISSION_BLOCKED` -- hit a blocker that cannot be self-resolved. Include mission ID + blocker description.
+
+**Escalation rule:** If blocked for more than 5 minutes on any single issue (Windows path error, permission denied, missing dependency, ambiguous spec), immediately log `MISSION_BLOCKED` with details. Do NOT go silent. Do NOT retry indefinitely. Escalate.
+
+**Example hive entries:**
+```
+node dist/hive-cli.js log "MISSION_COMPLETE" "Mission abc123 complete. npm audit fix applied, 0 vulnerabilities."
+node dist/hive-cli.js log "MISSION_BLOCKED" "Mission abc123 blocked: git worktree remove fails with ENAMETOOLONG on Windows. Need Melanie intervention."
+```
+
 ### Standing Rules
 
 - Every task gets a spec file BEFORE build starts. No exceptions.
