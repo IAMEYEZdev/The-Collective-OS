@@ -134,6 +134,46 @@ Token cost lever remains `/compact`, `/clear` and tighter delegation scope.
 
 ---
 
+## Surface decision: Claude Code, not Claude Desktop (2026-07-26)
+
+Question raised: should these packs live in the Claude Desktop app instead, so Claude can see more of the Windows machine?
+
+**No, and the premise is inverted.** Desktop sees less of the machine, not more.
+
+| | Claude Code (ClaudeClaw today) | Claude Desktop / claude.ai |
+|---|---|---|
+| Skill storage | Filesystem, `~/.claude/skills/`, plain directories | Zip upload via Settings, Features |
+| Where skills run | Locally, real bash, real filesystem | Code-execution **VM sandbox** |
+| Machine access | Full, this is how the fleet works today | Sandboxed. Local access only via separately configured MCP servers |
+| Sync | Git, one source of truth | **Does not sync across surfaces.** claude.ai, API and Claude Code are separate |
+
+The fleet already has the deeper access. Moving skills to Desktop would trade real machine access for a sandbox.
+
+**The governance problem is worse than the capability one.** Skills do not sync across surfaces. A Desktop copy is a second, divergent installation with no `git pull` path. Critically, `humanizer-collective` would not be there unless separately uploaded, so a Desktop instance drafting client prose has no DIR-001 enforcement at all. That is a constitutional hole, not an inconvenience.
+
+**Where Desktop does win:** ad-hoc, human-in-the-loop document work. Reviewing a specific contract with the PDF open in front of you is Desktop-shaped. A scheduled margin audit is ClaudeClaw-shaped.
+
+**Ruling:** fleet packs stay on Claude Code. If a Desktop surface is wanted for interactive contract review, upload `claude-for-legal` plus `humanizer-collective` together, never the legal pack alone, and treat it as a read-and-advise surface that produces nothing client-facing without a pass back through the fleet gate.
+
+## Finding: em dash density in the new packs (DIR-001 risk)
+
+Scanned on 2026-07-26 after forking.
+
+| Pack | SKILL.md with em dashes | Total occurrences |
+|---|---|---|
+| `claude-for-legal` | 151 of 151 | 5,834 |
+| `financial-services` | 114 of 118 | 1,103 |
+| `marketing-skills` | 44 of 48 | 1,097 |
+| `claude-seo` | 1 of 33 | 1 |
+
+**9,035 occurrences across the four packs.** They sit in instruction prose, not in client-facing output templates, which is the better of the two possibilities. But loading several thousand em dashes of instruction text into context is a real style prior, and DIR-001 is absolute.
+
+**Decision: strengthen the gate, do not rewrite the corpus.**
+
+Stripping em dashes from 350 forked files was considered and rejected on two grounds. First, coding-discipline §3: the causal path to DIR-001 compliance is the send gate, which already exists. Rewriting upstream prose is adjacent improvement. Second, and decisive, it would make every future upstream refresh diff enormous and unreviewable, defeating R4 and R5 below.
+
+**Mitigation:** `humanizer` then `humanizer-collective` remain mandatory on any prose these packs produce. That was already the rule. This finding raises its priority from routine to load-bearing, because the packs actively push the other way. Any agent linking one of these packs must have `humanizer-collective` linked too. Both installers enforce this by making it Tier 1, so it is always present.
+
 ## Risk register
 
 | ID | Risk | Likelihood | Impact | Mitigation |
@@ -144,6 +184,8 @@ Token cost lever remains `/compact`, `/clear` and tighter delegation scope.
 | R4 | Forks drift from upstream, security fixes missed | 3 | 3 | Quarterly refresh, procedure below. |
 | R5 | Upstream repo goes hostile after a future pull | 2 | 5 | Owned forks. Re-audit diff before any refresh lands. |
 | R6 | Caveman installed outside the repo, unnoticed | 2 | 4 | Check `%USERPROFILE%\.claude\skills` during Monday audit. |
+| R7 | Em dash density in new packs biases output, breaching DIR-001 | 4 | 4 | `humanizer-collective` is Tier 1 in both installers, so it is always linked alongside. Gate is mandatory, not advisory. |
+| R8 | Desktop copy of a pack diverges, with no DIR-001 enforcement | 3 | 4 | Fleet packs stay on Claude Code. Any Desktop upload pairs the pack with `humanizer-collective`, and produces nothing client-facing without a pass back through the fleet gate. |
 
 ## Refresh procedure (quarterly)
 
