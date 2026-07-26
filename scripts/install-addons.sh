@@ -1,171 +1,133 @@
 #!/usr/bin/env bash
 #
-# install-addons.sh
+# install-addons.sh - bash twin of forks/install-addons.ps1
 #
-# Tiered installer for the vetted subset of the "24 power-user add-ons" list.
-# Audit and rationale: docs/power-user-addons-audit.md
+# Links the vetted add-on forks into ~/.claude/skills by symlink, so a
+# `git pull` on this repo updates the live skills with no reinstall step.
 #
-# Every repo here was cloned and inspected on 2026-07-26. Commands are the
-# corrected versions, not the ones printed in the source guide.
+# Windows is the primary host. Use forks/install-addons.ps1 there (junctions).
+# This script is for macOS, Linux, and WSL.
+#
+# Audit:  docs/power-user-addons-audit.md
+# Plan:   forks/INCORPORATION-PLAN.md
 #
 # Usage:
-#   scripts/install-addons.sh --tier 1          # core, recommended default
-#   scripts/install-addons.sh --tier 2          # core + revenue-adjacent
-#   scripts/install-addons.sh --tier 3          # everything, heavy
-#   scripts/install-addons.sh --tier 1 --dry-run
-#
-# Runs on Git Bash (Windows), macOS, and Linux.
+#   scripts/install-addons.sh --tier 2               # recommended default
+#   scripts/install-addons.sh --tier 3               # + gstack (needs bun)
+#   scripts/install-addons.sh --tier 2 --dry-run
+#   scripts/install-addons.sh --uninstall
 
 set -euo pipefail
 
-TIER=1
+TIER=2
 DRY_RUN=0
+UNINSTALL=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --tier)     TIER="${2:-1}"; shift 2 ;;
-    --dry-run)  DRY_RUN=1; shift ;;
-    -h|--help)  sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
-    *)          echo "Unknown option: $1" >&2; exit 2 ;;
+    --tier)      TIER="${2:-2}"; shift 2 ;;
+    --dry-run)   DRY_RUN=1; shift ;;
+    --uninstall) UNINSTALL=1; shift ;;
+    -h|--help)   sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *)           echo "Unknown option: $1" >&2; exit 2 ;;
   esac
 done
 
 case "$TIER" in 1|2|3) ;; *) echo "Error: --tier must be 1, 2, or 3" >&2; exit 2 ;; esac
 
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+FORKS="$REPO_ROOT/forks"
+SKILLS_DIR="${HOME}/.claude/skills"
+
 log()  { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
 note() { printf '    %s\n' "$*"; }
 warn() { printf '\033[33m    WARN: %s\033[0m\n' "$*" >&2; }
 
-run() {
-  if [[ $DRY_RUN -eq 1 ]]; then
-    printf '    [dry-run] %s\n' "$*"
-  else
-    printf '    $ %s\n' "$*"
-    "$@"
-  fi
-}
+# name | source path | min tier | note
+PACKS=(
+  "humanizer-collective|$REPO_ROOT/skills/humanizer-collective|1|Override layer. Subordinates humanizer to DIR-001."
+  "marketing-skills|$FORKS/marketing-skills/skills|2|48 skills. Melissa and James. Scope per agent."
+  "claude-seo|$FORKS/claude-seo|2|33 skills. Melissa. Dormant until search is an active track."
+  "financial-services|$FORKS/financial-services/plugins|2|118 skills. Jackson. Margin floor, DSO, pipeline."
+  "claude-for-legal|$FORKS/claude-for-legal|2|151 skills. Sean and Melanie. Contract review."
+  "gstack|$FORKS/gstack|3|59 skills. Project-scoped. Overlaps docs/coding-discipline.md."
+)
 
-# ----------------------------------------------------------------------------
-# Preflight
-# ----------------------------------------------------------------------------
+if [[ $UNINSTALL -eq 1 ]]; then
+  log "Uninstalling add-on links"
+  for entry in "${PACKS[@]}"; do
+    IFS='|' read -r name _src _tier _note <<< "$entry"
+    link="$SKILLS_DIR/$name"
+    if [[ -L "$link" || -e "$link" ]]; then
+      if [[ $DRY_RUN -eq 1 ]]; then note "[dry-run] would remove $link"
+      else rm -rf "$link"; note "removed $name"; fi
+    else
+      note "$name not present, skipping"
+    fi
+  done
+  log "Done"
+  exit 0
+fi
 
 log "Preflight"
 
-if ! command -v node >/dev/null 2>&1; then
-  echo "Error: Node.js is required. Install v18 or newer from nodejs.org." >&2
+if [[ ! -d "$FORKS" ]]; then
+  echo "Error: $FORKS not found. Run from a full clone." >&2
   exit 1
 fi
-
-NODE_MAJOR="$(node -p 'process.versions.node.split(".")[0]')"
-if [[ "$NODE_MAJOR" -lt 18 ]]; then
-  echo "Error: Node.js 18+ required, found v${NODE_MAJOR}." >&2
-  exit 1
-fi
-note "node v$(node -p 'process.versions.node') ok"
 
 if [[ "$TIER" -ge 3 ]] && ! command -v bun >/dev/null 2>&1; then
-  warn "bun is not installed. gstack (tier 3) will be skipped."
-  warn "The source guide omits this. gstack's setup script hard-exits without bun."
-  warn "Install from bun.sh, then re-run."
+  warn "bun not installed. gstack will be linked but its setup cannot run."
+  warn "The source guide names Node 18+ as the prerequisite. That is wrong for gstack."
+  warn "Install from bun.sh, then: cd forks/gstack && ./setup"
 fi
 
-# ----------------------------------------------------------------------------
-# Tier 1: core. Low risk, immediately additive, safe to carry globally.
-# ----------------------------------------------------------------------------
+note "skills dir: $SKILLS_DIR"
+note "tier:       $TIER"
 
-log "Tier 1: core"
+[[ $DRY_RUN -eq 1 ]] || mkdir -p "$SKILLS_DIR"
 
-note "Humanizer (blader/humanizer)"
-note "  Wikipedia WikiProject AI Cleanup pattern library. Backs DIR-001."
-note "  Governed by the override layer in skills/humanizer-collective/,"
-note "  which restores the absolute no-em-dash rule that Humanizer relaxes."
-run npx -y skills add blader/humanizer --global --yes
+log "Linking packs (tier $TIER)"
 
-note "Find Skills CLI (vercel-labs/skills)"
-note "  Search before building. 'npx skills find <topic>'."
-run npx -y skills@latest --version
+linked=0
+for entry in "${PACKS[@]}"; do
+  IFS='|' read -r name src tier ptext <<< "$entry"
+  [[ "$tier" -gt "$TIER" ]] && continue
 
-note "Anthropic official skills marketplace"
-note "  Adds brand-guidelines, frontend-design, mcp-builder, claude-api and others."
-note "  skill-creator, docx, pdf, pptx, xlsx, canvas-design and"
-note "  web-artifacts-builder are already installed. The marketplace will not"
-note "  duplicate them."
-cat <<'EOF'
+  if [[ ! -e "$src" ]]; then
+    warn "$name: source missing at $src, skipping"
+    continue
+  fi
 
-    Plugin marketplaces are added from inside Claude Code, not from bash.
-    Paste these two lines into a Claude Code session:
+  note ""
+  note "$name"
+  note "  $ptext"
 
-      /plugin marketplace add anthropics/skills
-      /plugin install brand-guidelines
-
-    Then add frontend-design and mcp-builder only if a project needs them.
-
-EOF
-
-note "Superpowers: SKIPPED, already in use (see docs/superpowers/plans/)."
-
-# ----------------------------------------------------------------------------
-# Tier 2: revenue-adjacent. Scoped installs only.
-# ----------------------------------------------------------------------------
-
-if [[ "$TIER" -ge 2 ]]; then
-  log "Tier 2: revenue-adjacent"
-
-  note "Marketing Skills (coreyhaines31/marketingskills), scoped"
-  note "  The repo ships 48 skills. Installing all 48 buries the useful ones."
-  note "  Taking the five that map to the Authority track."
-  run npx -y skills add coreyhaines31/marketingskills \
-    --skill copywriting cro content-strategy social ads \
-    --global --yes
-
-  note "Claude SEO (AgriciDaniel/claude-seo): NOT installed by default."
-  note "  33 skills. Search traffic is not an active track. Install only if"
-  note "  that changes:  npx skills add AgriciDaniel/claude-seo --global"
-fi
-
-# ----------------------------------------------------------------------------
-# Tier 3: heavy. Project-scoped, never global.
-# ----------------------------------------------------------------------------
-
-if [[ "$TIER" -ge 3 ]]; then
-  log "Tier 3: heavy (project-scoped)"
-
-  warn "These are large and opinionated. Install per project, not globally."
-
-  note "Agent Browser (vercel-labs/agent-browser), 12 MB"
-  run npx -y skills add vercel-labs/agent-browser --yes
-
-  note "Hyperframes (heygen-com/hyperframes), 172 MB"
-  note "  The LFS flag is required or the clone hangs. The guide gets this right."
+  link="$SKILLS_DIR/$name"
   if [[ $DRY_RUN -eq 1 ]]; then
-    printf '    [dry-run] GIT_LFS_SKIP_SMUDGE=1 npx skills add heygen-com/hyperframes --yes\n'
-  else
-    GIT_LFS_SKIP_SMUDGE=1 npx -y skills add heygen-com/hyperframes --yes
+    note "  [dry-run] would link $link -> $src"
+    continue
   fi
 
-  if command -v bun >/dev/null 2>&1; then
-    note "gstack (garrytan/gstack), 70 MB, 59 skills"
-    warn "gstack is a full development methodology. It will overlap and argue"
-    warn "with docs/coding-discipline.md. Keep it out of ~/.claude/skills."
-    note "  To install into a project instead:"
-    note "    git clone --depth 1 https://github.com/garrytan/gstack .gstack"
-    note "    cd .gstack && ./setup"
-  else
-    note "gstack: SKIPPED, bun not found."
-  fi
-fi
+  rm -rf "$link"
+  ln -s "$src" "$link"
+  note "  linked"
+  linked=$((linked + 1))
+done
 
-# ----------------------------------------------------------------------------
-# Blocked
-# ----------------------------------------------------------------------------
+log "Blocked, deliberately not installed"
+note "Caveman (JuliusBrussee/caveman)"
+note "  Rewrites agent replies into caveman-speak. Breaches DIR-001 by construction."
+note "  Ships /caveman-compress, advertised for rewriting CLAUDE.md. Ours is 47 KB of"
+note "  doctrine governing six agents. Its own README reports 0% input token savings."
+note "  Audit section 5. If it turns up in ~/.claude/skills, remove it."
 
-log "Blocked"
-note "Caveman (JuliusBrussee/caveman): NOT INSTALLED, and not installable here."
-note "  Rewrites agent replies into caveman-speak. Direct DIR-001 breach."
-note "  Ships /caveman-compress, advertised for rewriting CLAUDE.md. This repo's"
-note "  CLAUDE.md is 47 KB of constitutional doctrine governing six agents."
-note "  Its own README reports 0% input token savings. See audit section 5."
-
-log "Done (tier $TIER)"
-note "Full audit: docs/power-user-addons-audit.md"
-note "Verify what landed:  npx skills list"
+log "Done"
+note "$linked pack(s) linked."
+note "Already installed separately, untouched: humanizer, superpowers, Codex CLI, agent-browser."
+note ""
+note "Still needs a Claude Code session (marketplaces cannot be added from a shell):"
+note "  /plugin marketplace add anthropics/skills"
+note "  /plugin install brand-guidelines"
+note ""
+note "Verify: ls -la $SKILLS_DIR"

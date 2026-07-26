@@ -31,11 +31,30 @@ Twenty-four is a marketing number. The actual install count is closer to thirtee
 |---|---|
 | Claude Skills, Frontend Design, Skill Creator, MCP Builder | One install. The latter three are directories inside `anthropics/skills`. |
 | Marketing Skills, Social Media Skills | One repo. `social` is a real skill name inside it, so the `--skill social` command is valid, but it is not a separate add-on. |
-| Financial Services, Claude for Legal | Not installs. These are Anthropic industry pages, nothing to add. |
+| Financial Services, Claude for Legal | **Correction, see section 2a.** These are real installable repos. The first version of this audit called them sales pages. That was wrong. |
 | Kondo | Not an install. The guide admits this: it is `/compact` and `/clear`. |
 | Slack, Notion, Zapier, Granola, Perplexity, Higgsfield | Not installs. Six clicks in Settings, Connectors. |
 
-Real terminal or plugin installs: **13**.
+Real terminal or plugin installs: **15**.
+
+---
+
+## 2a. Correction: Financial Services and Legal are real installs
+
+The first version of this audit stated that Claude for Financial Services and Claude for Legal were "Anthropic industry pages, nothing to add." That was wrong, and it was wrong in the direction that would have cost capability.
+
+Both are real, public, installable GitHub repositories:
+
+| Repo | Skills | Size | Contents |
+|---|---|---|---|
+| `anthropics/financial-services` | 118 | 3.9M | `plugins/` with agent, vertical and partner-built plugin sets |
+| `anthropics/claude-for-legal` | 151 | 4.8M | `commercial-legal`, `corporate-legal`, `ip-legal`, `litigation-legal`, `employment-legal`, `ai-governance-legal` and more |
+
+Both cloned and inspected on 2026-07-26. Both are now forked into `forks/`.
+
+The error came from treating the guide's own vague description ("It is an official industry solution, not a random add-on", with a bare `claude.com` link and no repo path) as evidence that nothing was installable. The guide gave no install command for these two, which is a gap in the guide, but the absence of a command is not evidence of the absence of a repo. Verifying the other ten by cloning and these two by reading the guide was an inconsistent standard.
+
+**Correcting the guide's error count:** this is a genuine omission in the source material. Every other item on the list ships an install command. These two do not, and they are among the highest-value items on it for a consultancy that reviews client contracts and audits margin.
 
 ---
 
@@ -54,21 +73,32 @@ Two smaller notes, both of which the guide gets right and are worth keeping: `hy
 
 ---
 
-## 4. Already running. Do not reinstall.
+## 4. Install status, verified against the repo
 
-Roughly a third of the list is done.
+Evidence is repo-side. The Windows host's `~/.claude/skills/` is not visible from an audit container, so "installed" below means the fleet has it wired, proven by references in tracked files.
 
-| Guide item | Status here |
+**Confirmed installed. Do not reinstall.**
+
+| Item | Evidence |
 |---|---|
-| Superpowers | **Already in use.** `docs/superpowers/plans/` holds build plans dating to May 2026. |
-| Higgsfield | **Already connected** as a live MCP server. |
-| Slack, Gmail, Google Calendar | **Already wired** via `skills/`. |
-| Skill Creator | **Already installed** globally. |
-| canvas-design, docx, pdf, pptx, xlsx, web-artifacts-builder | **Already installed** globally. |
+| **Humanizer** | Listed in four agent `CLAUDE.md` files as a global skill, and gated into workflow: "Every message drafted via `message-crafter.ts` must pass through `humanizer` skill before send." |
+| **Superpowers** | `docs/superpowers/plans/2026-05-29-claw-code-integration.md` invokes `superpowers:subagent-driven-development` as a required sub-skill. |
+| **Codex CLI** | 25 tracked files reference it. Load-bearing in the Neo architecture: "Codex CLI + oh-my-codex substrate", `neo-dispatch.mjs` spawns oh-my-codex leader sessions. |
+| **Agent Browser** | In Melanie's skills table in `CLAUDE.md` and in `scripts/setup.ts`. |
+| Higgsfield | Live MCP server this session. |
+| Slack, Gmail, Google Calendar | Wired via `skills/`. |
 
-Of the `anthropics/skills` pack, genuinely new: `brand-guidelines`, `frontend-design`, `mcp-builder`, `claude-api`, `doc-coauthoring`, `internal-comms`, `theme-factory`, `webapp-testing`, `algorithmic-art`, `slack-gif-creator`.
+**Confirmed not installed. Zero references anywhere in the repo.**
 
-`brand-guidelines` is the pick of those. It is the closest thing in the pack to machine-enforcing DIR-001.
+`gstack`, `marketing-skills`, `claude-seo`, `financial-services`, `claude-for-legal`, `hyperframes`, `caveman`.
+
+All except `hyperframes` and `caveman` are now forked into `forks/`.
+
+**Ambiguous: `anthropics/skills`.** Zero repo references. The global-skills list in the agent `CLAUDE.md` files names `gmail`, `browser-harness`, `playwright-skill`, `humanizer`, `enhance-prompt`, `gdocs`, and none of the Anthropic pack. That points to not installed. It cannot be settled from here because plugin marketplaces are added inside a Claude Code session, which leaves no repo trace. Run `/plugin marketplace add anthropics/skills` on the host and let it no-op if already present.
+
+Of that pack, `brand-guidelines` is the pick. It is the closest thing available to machine-enforcing DIR-001.
+
+**Caveman note.** Jason stated this was already installed. A full repo search found zero references. If it is on the Windows host it was installed outside the repo. Recommendation is unchanged: remove it. See section 5.
 
 ---
 
@@ -102,25 +132,38 @@ The Collective's rule is absolute: no em dashes, ever. Per the Standing Rule on 
 
 ---
 
-## 7. Recommendation
+## 7. What was installed
 
-Install in three tiers. The installer at `scripts/install-addons.sh` implements exactly this.
+Five packs forked into `forks/` on 2026-07-26, upstream `.git` stripped so they are owned forks per Absorption Doctrine step 3. Rollout plan: `forks/INCORPORATION-PLAN.md`.
 
-**Tier 1, core.** Low risk, immediately additive.
-- `anthropics/skills` marketplace, for `brand-guidelines`, `frontend-design`, `mcp-builder`
-- `blader/humanizer`, governed by the override layer in `skills/humanizer-collective/`
-- `vercel-labs/skills` CLI, to search before building
+| Fork | Skills | Size | Tier | Owner |
+|---|---|---|---|---|
+| `gstack` | 59 | 19M | 3 | Engineering, project-scoped |
+| `marketing-skills` | 48 | 4.5M | 2 | Melissa, James |
+| `claude-seo` | 33 | 5.2M | 2 | Melissa, dormant |
+| `financial-services` | 118 | 3.9M | 2 | Jackson |
+| `claude-for-legal` | 151 | 4.8M | 2 | Sean, Melanie |
 
-**Tier 2, revenue-adjacent.** Install selectively, not wholesale.
-- `coreyhaines31/marketingskills`, scoped to `copywriting cro content-strategy social ads`. It ships 48 skills. Taking all 48 buries the ones that matter.
-- `AgriciDaniel/claude-seo` only if search traffic becomes an actual track. It is not one today.
+**409 skills, 37M.** gstack was trimmed of 29M of browser test fixtures and 9.4M of committed build output before vendoring.
 
-**Tier 3, heavy. Opt-in per project, never fleet-wide.**
-- `garrytan/gstack` (70 MB, 59 skills, needs bun). It is a full opinionated development methodology and it will argue with `docs/coding-discipline.md`. Do not put it in the global skills directory.
-- `vercel-labs/agent-browser` (12 MB)
-- `heygen-com/hyperframes` (172 MB, needs the LFS flag)
+Install on the Windows host by junction, so `git pull` updates the live skills with no reinstall step:
 
-**Blocked.** `JuliusBrussee/caveman`, per section 5.
+```powershell
+powershell -ExecutionPolicy Bypass -File forks\install-addons.ps1 -Tier 2 -DryRun
+powershell -ExecutionPolicy Bypass -File forks\install-addons.ps1 -Tier 2
+```
+
+Tier 3 adds gstack and needs bun first. See the incorporation plan, Phase 4.
+
+**Not forked, deliberately:**
+- `hyperframes` (172 MB). Video is not an active track and Higgsfield already covers generation.
+- `caveman`. Blocked, section 5.
+
+**Still needs a Claude Code session**, because plugin marketplaces cannot be added from a shell:
+```
+/plugin marketplace add anthropics/skills
+/plugin install brand-guidelines
+```
 
 ---
 
