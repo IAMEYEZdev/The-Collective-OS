@@ -66,23 +66,53 @@ Every client contract runs through `commercial-legal` before signature. Output i
 ### 3d. Competitive intelligence (Annika)
 `competitor-profiling` folds into the weekly digest. Cross-reference against the Friday Capture goal.
 
-## Phase 4: gstack decision (Week 2)
+## Phase 4: gstack decision (RESOLVED 2026-07-26)
 
-gstack is the one Jason specifically asked for. It is also the one that needs a decision rather than an install.
+**Ruling: keep the fork as reference. Do not link it. Tier 3 stays unrun.**
 
-**What it is:** 59 skills implementing a full opinionated development methodology, with CEO, designer, engineer and QA role separation.
+gstack is the one Jason specifically asked for, and the capability he wants from it is real: CEO, designer, engineer and QA review as separate passes. The problem is that the capability cannot be separated from the methodology.
 
-**Why it is not Tier 2:**
-1. It requires `bun`. The source guide names Node 18+ as the prerequisite, which is wrong, and its `setup` script hard-exits without bun.
-2. It carries its own `CLAUDE.md`, `ETHOS.md`, `DESIGN.md` and `ARCHITECTURE.md`. These will argue with `docs/coding-discipline.md`, which already defines posture, reversibility ranking and surgical-diff rules.
-3. 59 skills fleet-wide is the single largest context addition on this list.
+### Finding 1: the ethos is inlined, so there is no clean subset
 
-**Recommendation:** install bun, then run gstack project-scoped on one real build. Judge it on that build. If it wins, reconcile its methodology docs against `docs/coding-discipline.md` and pick one. Do not run both.
+`ETHOS.md` says its principles "are injected into every workflow skill's preamble automatically." That is not a runtime reference to a file that can simply be left unlinked. It is a build-time inline. Every built `SKILL.md` already carries the text:
+
+```
+## Completeness Principle - Boil the Ocean
+
+AI makes completeness cheap, so the complete thing is the goal. Recommend full
+coverage (tests, edge cases, error paths) - boil the ocean one lake at a time.
+The only thing out of scope is genuinely unrelated work (rewrites, multi-quarter
+migrations); flag that as separate scope, never as an excuse for a shortcut.
+```
+
+That block is present in `review/SKILL.md`, `qa/SKILL.md`, `design-review/SKILL.md`, `plan-ceo-review/SKILL.md` and the rest. Cherry-picking the four review skills imports it four times over.
+
+### Finding 2: the conflict is on the most load-bearing rule we have
+
+`docs/coding-discipline.md` §3 defines out of scope as: adjacent code that merely sits near your change, style refactors, pre-existing dead code. Its test is "every changed line should serve the stated goal or the causal path to it."
+
+gstack defines out of scope as: genuinely unrelated work only, and explicitly forbids treating anything narrower as a reason to stop.
+
+Those are not different emphases. They are opposite definitions of the same term, and §3 is the rule that keeps six agents from expanding every maintenance ticket into a refactor. gstack's position is coherent on greenfield work where nothing depends on the result yet. It is the wrong default for a running system where most work is maintenance posture on code other agents call.
+
+### Finding 3: the volume
+
+**62,174 lines across 59 `SKILL.md` files.** The entire constitutional `CLAUDE.md` is roughly 900. A single gstack skill, `review`, is 1,852 lines. Linking the review cluster alone adds about 7,500 lines of instruction carrying a competing methodology.
+
+### What was done instead
+
+`skills/plan-review/SKILL.md`. The four-lens structure that Jason wanted, CEO plus design plus engineering plus QA as separate passes with an explicit reconcile step, written to run under `docs/coding-discipline.md` rather than against it. Roughly 150 lines against gstack's 7,500 for the same capability, and it is ours to change.
+
+### When to revisit
+
+Run real gstack if a genuinely greenfield, throwaway project comes up where boil-the-ocean is the correct default and no existing agent depends on the output. Never on ClaudeClaw itself.
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File forks\install-addons.ps1 -Tier 3
-cd forks\gstack; .\setup
+# Only for an isolated greenfield repo, never fleet-wide:
+cd forks\gstack; .\setup     # requires bun, see bun.sh
 ```
+
+The fork stays in tree because it is good reference material and re-cloning costs a session. Keeping it is free. Linking it is not.
 
 ## Phase 5: Compound (Week 3+)
 

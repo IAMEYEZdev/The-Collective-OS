@@ -10,7 +10,7 @@
 # Usage:
 #   -Tier 1      humanizer-collective only (already-installed humanizer keeps working)
 #   -Tier 2      + marketing-skills, claude-seo, financial-services, claude-for-legal
-#   -Tier 3      + gstack (heavy, needs bun)
+#   -Tier 3      reserved (gstack is reference-only, see INCORPORATION-PLAN.md Phase 4)
 #   -DryRun      show what would happen, change nothing
 #   -Uninstall   remove the junctions this script created
 
@@ -43,8 +43,12 @@ $Packs = @(
        Note = "118 skills. Jackson. Margin floor, DSO, pipeline analysis." }
     @{ Name = "claude-for-legal";     Source = (Join-Path $Root "claude-for-legal");               Tier = 2
        Note = "151 skills. Sean and Melanie. Client contract review before signature." }
-    @{ Name = "gstack";               Source = (Join-Path $Root "gstack");                         Tier = 3
-       Note = "59 skills. Project-scoped only. Overlaps docs\coding-discipline.md." }
+    # gstack is deliberately NOT listed. Reference fork only, never linked.
+    # Its ethos is inlined into all 59 SKILL.md files and contradicts
+    # docs\coding-discipline.md section 3. See forks\INCORPORATION-PLAN.md Phase 4.
+    # The capability it was wanted for now lives in skills\plan-review.
+    @{ Name = "plan-review";          Source = (Join-Path $RepoRoot "skills\plan-review");            Tier = 1
+       Note = "Four-lens review (CEO, design, eng, QA). Runs under coding-discipline.md." }
 )
 
 if (-not (Test-Path $SkillsDir)) {
@@ -76,13 +80,10 @@ if ($Uninstall) {
 Write-Step "Preflight"
 
 if ($Tier -ge 3) {
-    if (Get-Command bun -ErrorAction SilentlyContinue) {
-        Write-Note "bun found, gstack eligible"
-    } else {
-        Write-Warn "bun not installed. gstack will be linked but its setup cannot run."
-        Write-Warn "The source guide says Node 18+ is the prerequisite. That is wrong for gstack."
-        Write-Warn "Install bun from bun.sh, then run: cd forks\gstack; .\setup"
-    }
+    Write-Warn "Tier 3 is reserved. gstack is a reference fork and is never linked."
+    Write-Warn "Its ethos is inlined into all 59 SKILL.md files and contradicts"
+    Write-Warn "docs\coding-discipline.md section 3. See forks\INCORPORATION-PLAN.md Phase 4."
+    Write-Warn "The capability it was wanted for now lives in skills\plan-review."
 }
 
 Write-Note "skills dir: $SkillsDir"

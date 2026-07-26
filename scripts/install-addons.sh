@@ -13,7 +13,6 @@
 #
 # Usage:
 #   scripts/install-addons.sh --tier 2               # recommended default
-#   scripts/install-addons.sh --tier 3               # + gstack (needs bun)
 #   scripts/install-addons.sh --tier 2 --dry-run
 #   scripts/install-addons.sh --uninstall
 
@@ -50,7 +49,10 @@ PACKS=(
   "claude-seo|$FORKS/claude-seo|2|33 skills. Melissa. Dormant until search is an active track."
   "financial-services|$FORKS/financial-services/plugins|2|118 skills. Jackson. Margin floor, DSO, pipeline."
   "claude-for-legal|$FORKS/claude-for-legal|2|151 skills. Sean and Melanie. Contract review."
-  "gstack|$FORKS/gstack|3|59 skills. Project-scoped. Overlaps docs/coding-discipline.md."
+  "plan-review|$REPO_ROOT/skills/plan-review|1|Four-lens review (CEO, design, eng, QA). Runs under coding-discipline.md."
+  # gstack deliberately absent. Reference fork only, never linked. Its ethos is
+  # inlined into all 59 SKILL.md files and contradicts coding-discipline.md s3.
+  # See forks/INCORPORATION-PLAN.md Phase 4.
 )
 
 if [[ $UNINSTALL -eq 1 ]]; then
@@ -76,10 +78,11 @@ if [[ ! -d "$FORKS" ]]; then
   exit 1
 fi
 
-if [[ "$TIER" -ge 3 ]] && ! command -v bun >/dev/null 2>&1; then
-  warn "bun not installed. gstack will be linked but its setup cannot run."
-  warn "The source guide names Node 18+ as the prerequisite. That is wrong for gstack."
-  warn "Install from bun.sh, then: cd forks/gstack && ./setup"
+if [[ "$TIER" -ge 3 ]]; then
+  warn "Tier 3 is reserved. gstack is a reference fork and is never linked."
+  warn "Its ethos is inlined into all 59 SKILL.md files and contradicts"
+  warn "docs/coding-discipline.md section 3. See forks/INCORPORATION-PLAN.md Phase 4."
+  warn "The capability it was wanted for now lives in skills/plan-review."
 fi
 
 note "skills dir: $SKILLS_DIR"
